@@ -53,6 +53,12 @@ Each persona has role-specific MCP access and communication policy.
 ### 4. Skill library and repeatable playbooks
 Skills capture recurring workflows so the system can run consistently over time instead of relying on ad-hoc prompts.
 
+StewardOS uses a layered skill ecosystem:
+
+- repository-tracked portable skills under `skills/`,
+- persona-local runtime skill overlays under `agent-configs/*/.codex/skills/`,
+- optional symlinked shared/global packs (environment-managed).
+
 ## Example Workflows
 
 - **Comptroller monthly close**: reconcile Actual + Ghostfolio + finance graph data, flag anomalies, and produce action-ready summaries.

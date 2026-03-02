@@ -23,6 +23,51 @@ Skills are stored under `skills/` and currently include:
 
 Shared skill references and conventions live in `skills/shared/`.
 
+## Skill source layers (full ecosystem)
+
+StewardOS uses a layered skill model in real deployments. The public repo only tracks layer 1 directly.
+
+### Layer 1: Repository-tracked portable skills (public, versioned)
+
+- Location: `skills/`
+- Purpose: portable OSS baseline that contributors can review and improve.
+- Tracked in git and documented in this repository.
+
+### Layer 2: Persona-local runtime skills (private, deployment-specific)
+
+- Location pattern: `agent-configs/<persona>/.codex/skills/`
+- Purpose: persona command wrappers, operating procedures, and role-specific orchestration skills.
+- Not tracked in public git by design (contains deployment-specific runtime context).
+
+### Layer 3: Symlinked shared skills (cross-repo reuse)
+
+In active deployments, persona skill folders may include symlinks to avoid duplicating shared skills.
+
+Common patterns:
+
+- `family-email-formatting` linked from each persona to the shared family-office formatting skill.
+- Chief-of-staff search skills linked to a shared admin skill pack (`search`, `search-strategy`).
+
+### Layer 4: Global toolchain skill packs (`$CODEX_HOME/skills`)
+
+Global Codex skills are often installed as symlinks to plugin-managed skill packs (for example Anthropic example skills and Claude plugin skills).
+
+These are environment-level capabilities and are intentionally not vendored into this repository.
+
+## Current symlink status
+
+Based on the current reference deployment:
+
+- Public repo tracked files contain no skill symlinks.
+- Runtime persona configs do use skill symlinks under `agent-configs/*/.codex/skills/`.
+- `$CODEX_HOME/skills` also uses symlinked plugin-provided skill packs.
+
+## About `knowledge-worker` and `financial-services`
+
+- Those exact skill names are **not currently linked as active skill directories** in the reference StewardOS runtime.
+- Equivalent/adjacent capabilities are currently represented by skills such as `knowledge-synthesis`, `financial-planning`, and domain-specific investment/comptroller skills.
+- If you want explicit `knowledge-worker` and `financial-services` packs, add them as layer-3/layer-4 skills and list them in persona `AGENTS.md` contracts.
+
 ## Skill contract in StewardOS
 
 Each skill should explicitly encode:
@@ -64,6 +109,13 @@ Each skill should explicitly encode:
 3. Add examples with realistic inputs/outputs.
 4. Reference the skill in relevant persona `AGENTS.md` contracts.
 5. Update docs if the skill changes architecture assumptions.
+
+### Add a symlinked shared skill
+
+1. Create or choose a canonical skill directory.
+2. Symlink it into each persona path that should consume it (`agent-configs/<persona>/.codex/skills/<skill-name>`).
+3. Confirm each consuming persona lists the skill in its `AGENTS.md` contract.
+4. Keep public docs describing the pattern, but do not commit private runtime paths.
 
 ### Modify an existing skill safely
 

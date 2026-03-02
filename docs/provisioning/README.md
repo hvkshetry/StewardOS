@@ -20,12 +20,14 @@ This guide keeps the public repository safe while still giving users a complete 
 - [`services/.env.example`](../../services/.env.example)
 - `agents/*/*.service.example` unit templates
 - MCP upstream lockfile: [`docs/upstreams/upstreams.lock.yaml`](../upstreams/upstreams.lock.yaml)
+- Skill architecture reference: [`docs/architecture/agent-skills/README.md`](../architecture/agent-skills/README.md)
 
 ### Non-tracked local artifacts (by design)
 
 - Rendered `.env` files with real credentials.
 - Rendered `.service` files under `/etc/systemd/system`.
 - OAuth tokens, mailbox credentials, and runtime state.
+- Runtime persona skill overlays under `agent-configs/*/.codex/skills/` (including local symlinks).
 
 ## Baseline provisioning workflow
 
@@ -65,6 +67,16 @@ scripts/verify_upstreams.sh
 cp provisioning/configure-systemd.example.sh provisioning/configure-systemd.sh
 bash provisioning/configure-systemd.sh
 ```
+
+### 5. Skill overlay bootstrap (runtime)
+
+Populate persona-local skill directories and any shared-skill symlinks required by your deployment.
+
+Examples:
+
+- Link shared `family-email-formatting` into persona skill folders.
+- Link shared search/knowledge skills into the personas that require them.
+- Install optional global skill packs in `$CODEX_HOME/skills` when needed.
 
 ## How provisioning participates in workflows
 
