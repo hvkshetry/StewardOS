@@ -1,5 +1,5 @@
 ---
-name: edu-planning
+name: child-development
 description: |
   Child education and development planning skill. Use when: (1) Creating age-appropriate
   activity plans, (2) Tracking developmental milestones, (3) Balancing activity types across

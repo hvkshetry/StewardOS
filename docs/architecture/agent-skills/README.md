@@ -18,10 +18,8 @@ Skills are stored under `skills/` and currently include:
 
 - `budgeting`
 - `document-management`
-- `edu-planning`
 - `family-email-formatting`
 - `investing`
-- `meal-planning`
 
 ### Shared cross-persona support skills
 
@@ -32,6 +30,8 @@ Skills are stored under `skills/` and currently include:
 ### Persona skill packs
 
 Persona-specific skills are now tracked in:
+
+Household Director persona skills include `meal-planning` and `child-development`.
 
 - `skills/personas/chief-of-staff/*`
 - `skills/personas/estate-counsel/*`
@@ -112,7 +112,7 @@ Each skill should explicitly encode:
 
 1. `meal-planning` builds week plan.
 2. Pantry state from Grocy modifies shopping output.
-3. `edu-planning` adds age-appropriate activity plan.
+3. `child-development` adds age-appropriate activity plan.
 4. Combined digest is delivered in a consistent family-office format.
 
 ## Customization and extension

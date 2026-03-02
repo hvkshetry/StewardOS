@@ -1,105 +1,114 @@
 ---
 name: portfolio-review
-description: Prepare for client review meetings with portfolio performance summary, allocation analysis, talking points, and action items.
-user-invocable: false
+description: Unified portfolio review workflow for both command-driven health checks and client review meeting preparation.
+user-invocable: true
 ---
 
-# Client Review Prep
+# /portfolio-review — Unified Portfolio Review
+
+This skill is the canonical portfolio review workflow for the investment officer persona.
+
+It supports two closely related modes in one playbook:
+
+1. **Portfolio Health Check (default)**: positions, risk, drift, concentration, TLH, and actionable recommendations.
+2. **Client Review Prep**: package-ready talking points, benchmark framing, and meeting action items.
 
 ## MCP Tool Map
 
-- Portfolio baseline and performance: `ghostfolio.portfolio(operation="summary")`, `ghostfolio.portfolio(operation="performance", range="1y")`
-- Risk and concentration: `portfolio-analytics.analyze_portfolio_risk`, `portfolio-analytics.get_condensed_portfolio_state`
-- Drift and rebalancing context: `portfolio-analytics.analyze_allocation_drift`
-- Tax overlays: `portfolio-analytics.find_tax_loss_harvesting_candidates`, `household-tax.compare_tax_scenarios`
-- Market and policy context: `market-intel-direct.get_market_snapshot`, `policy-events.get_recent_bills`, `policy-events.get_federal_rules`
-- Disclosure overlays for concentrated names: `sec-edgar.sec_edgar_filing`, `sec-edgar.sec_edgar_insider`
+- Portfolio baseline and performance: `ghostfolio.portfolio(operation="summary")`, `ghostfolio.portfolio(operation="performance", range="1y")`, `ghostfolio.portfolio(operation="dividends", range="1y")`
+- Portfolio state, risk, drift, and TLH: `portfolio-analytics.get_condensed_portfolio_state`, `portfolio-analytics.analyze_portfolio_risk`, `portfolio-analytics.analyze_allocation_drift`, `portfolio-analytics.find_tax_loss_harvesting_candidates`, `portfolio-analytics.validate_account_taxonomy`
+- Tax overlay: `household-tax.compare_tax_scenarios`
+- Market/policy context: `market-intel-direct.get_market_snapshot`, `market-intel-direct.search_market_news`, `policy-events.get_recent_bills`, `policy-events.get_federal_rules`
+- Disclosure overlays: `sec-edgar.sec_edgar_filing`, `sec-edgar.sec_edgar_insider`
 
-## Workflow
+## Execution Workflow
 
-### Step 1: Client Context
+### 1. Establish Scope and Baseline
 
-Gather or look up:
-- **Client name** and household members
-- **Account types**: Taxable, IRA, Roth, 401(k), trust, etc.
-- **Total AUM** across accounts
-- **Investment Policy Statement (IPS)**: Target allocation, risk tolerance, constraints
-- **Life stage**: Accumulation, pre-retirement, retirement, legacy
-- **Last meeting date** and any outstanding action items
+- Run `ghostfolio.portfolio(operation="summary")` for baseline context.
+- Run `portfolio-analytics.validate_account_taxonomy` before scoped analysis.
+- Run `portfolio-analytics.get_condensed_portfolio_state` for holdings/top positions/unrealized P&L.
+- For scoped calls, pass `scope_account_types` as a JSON list (for example `["brokerage","401k","hsa","equity_comp"]`).
 
-### Step 2: Portfolio Performance
+### 2. Run Risk and Concentration Checks
 
-For each account and the household aggregate:
+- Run `portfolio-analytics.analyze_portfolio_risk` for ES(97.5%), VaR, volatility, and max drawdown.
+- If ES > 2.5%: flag **RISK ALERT LEVEL 3** and discourage new risk additions.
+- Flag concentration issues (for example, any single position >10% or correlated concentration clusters).
 
-| Metric | QTD | YTD | 1-Year | 3-Year | Since Inception |
-|--------|-----|-----|--------|--------|----------------|
-| Portfolio return | | | | | |
-| Benchmark return | | | | | |
-| Alpha | | | | | |
+### 3. Evaluate Allocation Drift and Trade Context
 
-**Performance Attribution:**
-- Which asset classes / positions drove returns?
-- Top 3 contributors and top 3 detractors
-- Any outsized single-position impact?
-- Use `ghostfolio.portfolio(operation="performance", range="1y")` and `portfolio-analytics.get_condensed_portfolio_state`.
+- Run `portfolio-analytics.analyze_allocation_drift` using IPS targets.
+- Highlight assets beyond threshold drift (default 3-5%).
+- Convert drift signals into clear buy/sell notional actions.
 
-### Step 3: Allocation Review
+### 4. Run Tax Overlay and TLH Scan
 
-Current vs. target allocation:
+- Run `portfolio-analytics.find_tax_loss_harvesting_candidates` (typically taxable accounts only).
+- For taxable brokerage-only scans, use `scope_account_types=["brokerage"]`.
+- Include wash sale constraints and estimated tax savings.
+- If material decisions are pending, run `household-tax.compare_tax_scenarios`.
 
-| Asset Class | Target | Current | Drift | Action |
-|------------|--------|---------|-------|--------|
-| US Large Cap | | | | |
-| US Mid/Small | | | | |
-| International Developed | | | | |
-| Emerging Markets | | | | |
-| Fixed Income | | | | |
-| Alternatives | | | | |
-| Cash | | | | |
+### 5. Add Optional Context Layers
 
-Flag any drift exceeding the IPS rebalancing threshold (typically 3-5%).
-Use `portfolio-analytics.analyze_allocation_drift` for the drift table.
+- Macro context: `market-intel-direct.get_market_snapshot` and `market-intel-direct.search_market_news`.
+- Policy context: `policy-events.get_recent_bills`, `policy-events.get_federal_rules`.
+- Disclosure/insider overlays for concentrated names:
+  - `sec-edgar.sec_edgar_filing(operation="recent", identifier="[TICKER]", limit=3)`
+  - `sec-edgar.sec_edgar_insider(operation="summary", identifier="[TICKER]", days=180)`
 
-### Step 4: Talking Points
+### 6. Produce Outputs (Mode-appropriate)
 
-Generate a meeting agenda:
+#### A. Portfolio Health Check Output
 
-1. **Market overview** (2-3 min): Brief macro context and outlook
-2. **Portfolio performance** (5 min): How did we do? Why?
-3. **Allocation review** (5 min): Any rebalancing needed?
-4. **Planning updates** (5-10 min):
-   - Life changes? (job, health, family, home, education)
-   - Income needs changing?
-   - Tax situation updates
-   - Estate planning updates
-5. **Action items** (5 min): What are we doing before next meeting?
+```markdown
+## Portfolio Review — [Date]
 
-When preparing the opening market context, use `market-intel-direct.get_market_snapshot`.
+### Summary
+- Total Value: $X | Unrealized P&L: $Y
+- Scope: [entity/wrapper/account types]
 
-### Step 5: Proactive Recommendations
+### Risk
+- ES (97.5%): X.XX% [OK/ALERT]
+- VaR (95%): X.XX%
+- Max Drawdown: X.XX%
 
-Based on the review, suggest:
-- Rebalancing trades (if drift exceeds thresholds)
-- Tax-loss harvesting opportunities
-- Cash deployment or withdrawal planning
-- Roth conversion opportunities (if applicable)
-- Beneficiary updates or estate planning needs
-- Insurance review (life, disability, LTC)
-- For top concentration names, add SEC disclosure and insider summary overlays.
+### Allocation Drift
+| Symbol | Current | Target | Drift | Action |
+|--------|---------|--------|-------|--------|
 
-### Step 6: Output
+### TLH Opportunities
+| Symbol | Loss | Loss % | Est. Tax Savings | Replacement |
+|--------|------|--------|------------------|-------------|
 
-- One-page client review summary (Word or PDF)
-- Performance table with benchmarks
-- Allocation pie chart (current vs. target)
-- Recommended action items
-- Meeting agenda
+### Concentration Alerts
+- [Any flags]
 
-## Important Notes
+### Recommendations
+1. [Specific, actionable recommendations]
+```
 
-- Know your client before the meeting — review notes from last meeting
-- Lead with what the client cares about, not what you want to talk about
-- If performance was bad, address it directly — don't hide or spin
-- Always end with clear action items and next steps with dates
-- Document the meeting notes and any changes to the IPS
-- Compliance: ensure all materials are compliant with firm policies and regulatory requirements
+#### B. Client Review Prep Output
+
+Build a meeting packet with:
+
+- performance table with benchmark comparison,
+- allocation current-vs-target summary,
+- top contributors/detractors,
+- concise market context,
+- clear action items with dates and owners.
+
+Suggested agenda:
+
+1. Market overview (2-3 minutes)
+2. Performance and attribution (5 minutes)
+3. Allocation drift/rebalancing discussion (5 minutes)
+4. Planning updates (5-10 minutes)
+5. Confirmed action items (5 minutes)
+
+## Constraints and Notes
+
+- This is advisory only; no direct trade authority.
+- Always report tool gaps explicitly. Never fabricate values.
+- Prioritize client-relevant framing over metric dumping.
+- Keep recommendations traceable to tool outputs and assumptions.
