@@ -9,6 +9,8 @@ This repository is an integration architecture. Contributions should prioritize:
 - reproducible MCP dependency pinning,
 - documented operational behavior.
 
+StewardOS is maintained with a private-first workflow and curated public publishing. Public contributions should remain fully sanitized and reproducible.
+
 ## Getting Started
 
 1. Clone the repository.
@@ -35,3 +37,16 @@ Use sanitized `*.example` files.
 - Update architecture docs when behavior or boundaries change.
 - Include migration notes for any configuration contract change.
 - Preserve anonymization in public-facing examples and docs.
+- For persona/skill changes, include concrete before/after examples and rationale.
+
+## Skill Contributions
+
+Domain experts are encouraged to contribute role-specific skills:
+
+- nutrition/fitness experts for Wellness Advisor,
+- professional investors for Investment Officer,
+- CPAs/bookkeepers for Household Comptroller,
+- estate/legal practitioners for Estate Counsel.
+
+Start with:
+- `docs/community/skill-contribution-guide.md`

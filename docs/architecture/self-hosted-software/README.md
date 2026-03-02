@@ -1,28 +1,51 @@
 # Self-Hosted Software
 
-StewardOS runs a consolidated local software stack via Docker Compose.
+StewardOS uses Docker Compose as the baseline platform runtime for the household/family-office application stack.
 
-## Platform Services
+## Why this layer matters
 
-Core components include:
+This layer provides the source systems and operational surfaces that personas and MCP servers depend on. Without this layer, agents become disconnected from real state.
 
-- PostgreSQL and Redis infrastructure,
-- document management,
-- budgeting and finance apps,
-- portfolio tracking,
-- notes/knowledge capture,
-- household inventory and pantry systems,
-- workflow automation and data orchestration.
+## OSS stack components
 
-## Runtime Characteristics
+The current stack includes:
 
-- services are loopback-bound by default,
-- health checks are defined for critical services,
-- resource limits are explicitly set in compose definitions,
-- external exposure is expected through controlled ingress.
+- PostgreSQL and Redis infrastructure
+- Vaultwarden (password management)
+- Paperless-ngx (document management)
+- Ghostfolio (portfolio tracking)
+- Mealie (meal planning)
+- Actual Budget (cash-flow and budgeting)
+- Memos (notes/decision capture)
+- Homebox (household inventory)
+- changedetection.io (monitoring/alerts)
+- Grocy (pantry/inventory)
+- wger (fitness tracking)
+- Directus (estate graph UI/API layer)
+- n8n (workflow automation)
 
-## Operational Notes
+## Runtime characteristics
 
-- service-specific credentials are configured via local `.env` files (gitignored),
-- public templates are provided via `services/.env.example`,
-- backup and retention strategy is documented in service scripts.
+- loopback-bound ports by default,
+- explicit healthchecks for critical services,
+- resource controls for constrained hosts,
+- env-driven URL/domain and secret configuration.
+
+## Public compose contract
+
+Tracked files:
+
+- `services/docker-compose.yml`
+- `services/.env.example`
+- `services/personal-db/init-databases.sh`
+- service-specific support configs under `services/`
+
+## Example operational scenarios
+
+- Bring up the full data platform for persona workflows.
+- Use n8n + MCP servers for periodic synchronization tasks.
+- Run estate and finance data stores with isolated schema ownership.
+
+## Boundary
+
+This layer provides applications and storage only. Agent execution policy and persona constraints are defined in `agent-configs/` and `agents/`.

@@ -1,0 +1,544 @@
+services:
+  # ─── PostgreSQL (shared by paperless-ngx + ghostfolio + wger + n8n + graph apps) ───
+  personal-db:
+    image: postgres:16.6
+    container_name: personal-db
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:5433:5432"
+    command: >
+      postgres
+      -c random_page_cost=4.0
+      -c effective_io_concurrency=2
+      -c shared_buffers=512MB
+      -c work_mem=16MB
+      -c maintenance_work_mem=128MB
+      -c wal_buffers=16MB
+      -c checkpoint_completion_target=0.9
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      ESTATE_DB_PASSWORD: ${ESTATE_DB_PASSWORD}
+      FINANCE_DB_PASSWORD: ${FINANCE_DB_PASSWORD}
+      N8N_DB_PASSWORD: ${N8N_DB_PASSWORD}
+    volumes:
+      - personal-db-data:/var/lib/postgresql/data
+      - ./personal-db/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+    mem_limit: 1g
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - personal-net
+
+  # ─── Redis (shared by paperless-ngx + ghostfolio + wger) ───
+  personal-redis:
+    image: redis:7-alpine
+    container_name: personal-redis
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:6380:6379"
+    command: redis-server --maxmemory 200mb --maxmemory-policy allkeys-lru
+    volumes:
+      - personal-redis-data:/data
+    mem_limit: 256m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    networks:
+      - personal-net
+
+  # ─── Vaultwarden (password manager) ───
+  vaultwarden:
+    image: vaultwarden/server:1.35.2
+    container_name: vaultwarden
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:8222:80"
+    environment:
+      DOMAIN: ${VAULTWARDEN_DOMAIN}
+      SIGNUPS_ALLOWED: ${VAULTWARDEN_SIGNUPS_ALLOWED:-false}
+      ADMIN_TOKEN: ${VAULTWARDEN_ADMIN_TOKEN}
+    volumes:
+      - vaultwarden-data:/data
+    mem_limit: 256m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/alive"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    networks:
+      - personal-net
+
+  # ─── Paperless-ngx (document management) ───
+  paperless-ngx:
+    image: ghcr.io/paperless-ngx/paperless-ngx:2.20.7
+    container_name: paperless-ngx
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:8223:8000"
+    depends_on:
+      personal-db:
+        condition: service_healthy
+      personal-redis:
+        condition: service_healthy
+    environment:
+      PAPERLESS_REDIS: redis://personal-redis:6379/0
+      PAPERLESS_DBHOST: personal-db
+      PAPERLESS_DBPORT: "5432"
+      PAPERLESS_DBNAME: paperless
+      PAPERLESS_DBUSER: postgres
+      PAPERLESS_DBPASS: ${POSTGRES_PASSWORD}
+      PAPERLESS_OCR_PAGES: "1"
+      PAPERLESS_TASK_WORKERS: "1"
+      PAPERLESS_ENABLE_NLTK: "false"
+      PAPERLESS_SECRET_KEY: ${PAPERLESS_SECRET_KEY}
+      PAPERLESS_URL: ${PAPERLESS_URL}
+      PAPERLESS_APP_TITLE: ${PAPERLESS_APP_TITLE:-StewardOS Documents}
+    volumes:
+      - paperless-data:/usr/src/paperless/data
+      - paperless-media:/usr/src/paperless/media
+      - paperless-consume:/usr/src/paperless/consume
+      - ./paperless-base.css:/usr/src/paperless/static/base.css:ro
+    mem_limit: 1536m
+    cpus: 2.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - personal-net
+
+  # ─── Ghostfolio (investment tracker) ───
+  ghostfolio:
+    image: ghostfolio/ghostfolio:2.243.0
+    container_name: ghostfolio
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:8224:3333"
+    depends_on:
+      personal-db:
+        condition: service_healthy
+      personal-redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@personal-db:5432/ghostfolio
+      REDIS_HOST: personal-redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "1"
+      PROCESSOR_GATHER_ASSET_PROFILE_CONCURRENCY: "${GHOSTFOLIO_PROCESSOR_GATHER_ASSET_PROFILE_CONCURRENCY:-1}"
+      PROCESSOR_GATHER_HISTORICAL_MARKET_DATA_CONCURRENCY: "${GHOSTFOLIO_PROCESSOR_GATHER_HISTORICAL_MARKET_DATA_CONCURRENCY:-1}"
+      ACCESS_TOKEN_SALT: ${GHOSTFOLIO_ACCESS_TOKEN_SALT}
+      JWT_SECRET_KEY: ${GHOSTFOLIO_JWT_SECRET_KEY}
+    mem_limit: 1g
+    cpus: 2.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3333/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - personal-net
+
+  # ─── Mealie (recipe manager) ───
+  mealie:
+    image: ghcr.io/mealie-recipes/mealie:v3.11.0
+    container_name: mealie
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:9925:9000"
+    environment:
+      ALLOW_SIGNUP: "false"
+      TZ: America/New_York
+      BASE_URL: ${MEALIE_BASE_URL}
+    volumes:
+      - mealie-data:/app/data
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:9000/api/app/about')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - personal-net
+
+  # ─── Actual Budget (budgeting) ───
+  actual-budget:
+    image: actualbudget/actual-server:26.2.1
+    container_name: actual-budget
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:5006:5006"
+    volumes:
+      - actual-data:/data
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"const http = require('http'); http.get('http://localhost:5006/', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    networks:
+      - personal-net
+
+  # ─── Memos (notes / quick capture) ───
+  memos:
+    image: neosmemo/memos:0.26.1
+    container_name: memos
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:5230:5230"
+    volumes:
+      - memos-data:/var/opt/memos
+    mem_limit: 256m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5230/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    networks:
+      - personal-net
+
+  # ─── Homebox (home inventory) ───
+  homebox:
+    image: ghcr.io/sysadminsmedia/homebox:0.23.1
+    container_name: homebox
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:3100:7745"
+    environment:
+      HBOX_WEB_MAX_UPLOAD_SIZE: "10"
+      HBOX_WEB_ALLOW_REGISTRATION: "false"
+    volumes:
+      - homebox-data:/data
+    mem_limit: 256m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7745/api/v1/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    networks:
+      - personal-net
+
+  # ─── Change Detection (website monitoring) ───
+  changedetection:
+    image: dgtlmoon/changedetection.io:0.54.1
+    container_name: changedetection
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    extra_hosts:
+      - "host.docker.internal:0.0.0.0"
+    ports:
+      - "127.0.0.1:5000:5000"
+    environment:
+      BASE_URL: ${CHANGEDETECTION_BASE_URL}
+    volumes:
+      - changedetection-data:/datastore
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    networks:
+      - personal-net
+
+  # ─── Grocy (pantry inventory) ───
+  grocy:
+    image: lscr.io/linuxserver/grocy:4.5.0
+    container_name: grocy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:9283:80"
+    environment:
+      PUID: 1000
+      PGID: 1000
+      TZ: America/New_York
+    volumes:
+      - grocy-data:/config
+    mem_limit: 128m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    networks:
+      - personal-net
+
+  # ─── wger (workout & nutrition tracker) ───
+  wger-web:
+    image: wger/server:2.3-dev
+    container_name: wger-web
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:8280:8000"
+    depends_on:
+      personal-db:
+        condition: service_healthy
+      personal-redis:
+        condition: service_healthy
+    environment: &wger-env
+      DJANGO_DB_ENGINE: django.db.backends.postgresql
+      DJANGO_DB_DATABASE: wger
+      DJANGO_DB_USER: postgres
+      DJANGO_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DJANGO_DB_HOST: personal-db
+      DJANGO_DB_PORT: "5432"
+      DJANGO_CACHE_BACKEND: django_redis.cache.RedisCache
+      DJANGO_CACHE_LOCATION: redis://personal-redis:6379/2
+      DJANGO_CACHE_TIMEOUT: "1296000"
+      DJANGO_CACHE_CLIENT_CLASS: django_redis.client.DefaultClient
+      CELERY_BROKER: redis://personal-redis:6379/2
+      CELERY_BACKEND: redis://personal-redis:6379/2
+      SITE_URL: ${WGER_SITE_URL}
+      CSRF_TRUSTED_ORIGINS: ${WGER_CSRF_TRUSTED_ORIGINS}
+      X_FORWARDED_PROTO_HEADER_SET: "True"
+      SECRET_KEY: ${WGER_SECRET_KEY}
+      DJANGO_PERFORM_MIGRATIONS: "True"
+      TIME_ZONE: America/New_York
+      EXERCISE_CACHE_TTL: "18000"
+      WGER_INSTANCE: https://wger.de
+      ALLOW_REGISTRATION: "false"
+      ALLOW_GUEST_USERS: "false"
+      USE_RECAPTCHA: "false"
+    volumes:
+      - wger-static:/home/wger/static
+      - wger-media:/home/wger/media
+    mem_limit: 256m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/api/v2/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - personal-net
+
+  wger-celery-worker:
+    image: wger/server:2.3-dev
+    container_name: wger-celery-worker
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command: celery -A wger worker -l INFO --concurrency=1
+    depends_on:
+      - wger-web
+    environment:
+      <<: *wger-env
+    volumes:
+      - wger-media:/home/wger/media
+    mem_limit: 256m
+    cpus: 1.0
+    networks:
+      - personal-net
+
+  wger-celery-beat:
+    image: wger/server:2.3-dev
+    container_name: wger-celery-beat
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command: /start-beat
+    depends_on:
+      - wger-web
+    environment:
+      <<: *wger-env
+    mem_limit: 64m
+    cpus: 0.5
+    networks:
+      - personal-net
+
+  wger-nginx:
+    image: nginx:stable-alpine
+    container_name: wger-nginx
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:8281:80"
+    depends_on:
+      - wger-web
+    volumes:
+      - ./wger/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - wger-static:/wger/static:ro
+      - wger-media:/wger/media:ro
+    mem_limit: 32m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    networks:
+      - personal-net
+
+  # ─── Directus (estate graph UI) ───
+  directus:
+    image: directus/directus:latest
+    container_name: directus
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:8290:8055"
+    depends_on:
+      personal-db:
+        condition: service_healthy
+    environment:
+      DB_CLIENT: pg
+      DB_HOST: personal-db
+      DB_PORT: "5432"
+      DB_DATABASE: estate_planning
+      DB_USER: estate
+      DB_PASSWORD: ${ESTATE_DB_PASSWORD}
+      DB_SEARCH_PATH: estate
+      SECRET: ${DIRECTUS_SECRET}
+      ADMIN_EMAIL: ${DIRECTUS_ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${DIRECTUS_ADMIN_PASSWORD}
+      PUBLIC_URL: ${DIRECTUS_PUBLIC_URL}
+    volumes:
+      - directus-data:/directus/uploads
+      - directus-extensions:/directus/extensions
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://0.0.0.0:8055/server/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - personal-net
+
+  # ─── n8n (workflow automation) ───
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:5678:5678"
+    depends_on:
+      personal-db:
+        condition: service_healthy
+    environment:
+      N8N_HOST: ${N8N_HOST}
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-https}
+      N8N_PORT: "5678"
+      WEBHOOK_URL: ${N8N_WEBHOOK_URL}
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: personal-db
+      DB_POSTGRESDB_PORT: "5432"
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: n8n
+      DB_POSTGRESDB_PASSWORD: ${N8N_DB_PASSWORD}
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: ${N8N_AUTH_USER}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_AUTH_PASSWORD}
+      TZ: America/New_York
+    volumes:
+      - n8n_data:/home/node/.n8n
+    mem_limit: 256m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5678/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - personal-net
+
+  # ─── Watchtower (automatic Docker image updates) ───
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      TZ: America/New_York
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_SCHEDULE: "0 0 4 * * *"
+      WATCHTOWER_INCLUDE_STOPPED: "false"
+      WATCHTOWER_ROLLING_RESTART: "true"
+      WATCHTOWER_TIMEOUT: "60s"
+      WATCHTOWER_NOTIFICATION_URL: ${WATCHTOWER_NOTIFICATION_URL:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    mem_limit: 64m
+    cpus: 0.5
+    networks:
+      - personal-net
+
+networks:
+  personal-net:
+    driver: bridge
+
+volumes:
+  personal-db-data:
+  personal-redis-data:
+  vaultwarden-data:
+  paperless-data:
+  paperless-media:
+  paperless-consume:
+  mealie-data:
+  actual-data:
+  memos-data:
+  homebox-data:
+  changedetection-data:
+  grocy-data:
+  wger-static:
+  wger-media:
+  directus-data:
+  directus-extensions:
+  n8n_data:

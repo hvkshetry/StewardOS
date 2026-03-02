@@ -7,6 +7,8 @@
 3. Confirm each required production config has a sanitized `*.example` counterpart.
 4. Confirm upstream lockfile pins all external dependencies.
 5. Run `scripts/verify_upstreams.sh`.
+6. Validate compose manifest:
+   - `docker compose -f services/docker-compose.yml config`
 
 ## Docs Validation
 
@@ -14,6 +16,7 @@
 2. Deep architecture READMEs are complete and consistent.
 3. Roadmap reflects current migration priorities.
 4. Security and contribution docs are up to date.
+5. Community contribution pathways are documented for persona skill domains.
 
 ## Repository Hygiene
 
@@ -21,3 +24,4 @@
 2. No local runtime artifacts tracked.
 3. No vendored third-party source accidentally tracked.
 4. Release notes summarize major architecture and boundary decisions.
+5. No personal domains/logos/identity artifacts remain in tracked compose/docs.

@@ -1,22 +1,34 @@
 # Provisioning Guide
 
-StewardOS keeps **environment-specific provisioning scripts** out of source control to avoid leaking hostnames, users, domains, and credentials.
+StewardOS keeps host-specific provisioning state out of tracked public files while preserving reproducible setup through templates.
 
-To make deployment reproducible, this repository includes sanitized templates in `provisioning/`:
+## Why this approach
 
-- `deploy-host.example.sh` - bootstrap host packages, clone repo, and prepare runtime directories.
-- `configure-systemd.example.sh` - render/install `.service` units from tracked `*.service.example` files.
-- `stack.env.example` - baseline environment variables for service and MCP runtime wiring.
+Directly tracking production provisioning scripts often leaks sensitive hostnames, users, domains, or credential paths. StewardOS tracks sanitized templates instead.
 
-## How To Use
+## Included templates
 
-1. Copy each `*.example` file to a local, untracked file.
-2. Replace placeholders (`<YOUR_USER>`, `<YOUR_DOMAIN>`, `<STEWARDOS_ROOT>`, etc.).
-3. Run scripts on the target host with least privilege required.
-4. Store host-specific copies in a private ops repo or secret manager.
+- `provisioning/deploy-host.example.sh`
+- `provisioning/configure-systemd.example.sh`
+- `provisioning/stack.env.example`
 
-## Security Notes
+## Baseline provisioning flow
 
-- Never commit rendered env files, real service units, tunnel credentials, or OAuth token artifacts.
-- Keep deployment credentials separate from this repository.
-- Re-run `docs/RELEASE_CHECKLIST.md` before any public push.
+1. Copy templates to local untracked files.
+2. Fill host-specific values.
+3. Prepare runtime directories and dependencies.
+4. Render and install systemd service units from `*.service.example`.
+5. Bootstrap MCP upstream checkouts and validate lockfile pins.
+
+## Compose bootstrap
+
+1. Copy `services/.env.example` to `services/.env`.
+2. Fill secrets and domain values.
+3. Start services:
+   - `docker compose -f services/docker-compose.yml up -d`
+
+## Security notes
+
+- never track rendered env files or live credentials,
+- keep token artifacts in private/local paths,
+- run `docs/RELEASE_CHECKLIST.md` before public release pushes.

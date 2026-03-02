@@ -1,28 +1,43 @@
 # Agent Skills
 
-StewardOS skills encode repeatable playbooks for recurring tasks.
+Skills are reusable playbooks that encode high-quality procedures for recurring tasks.
 
-## Skill Design
+## Why skills are central
 
-Each skill should define:
+Without skills, agent behavior drifts and quality depends on prompt variability. Skills make workflows testable, reviewable, and improvable by domain experts.
 
-- scope and trigger conditions,
-- tool usage expectations,
-- data quality and provenance requirements,
-- output format constraints.
+## Skill domains in StewardOS
 
-## StewardOS Skill Domains
-
-Current skill coverage includes:
-
-- investing and risk workflows,
+- investing and portfolio workflows,
 - budgeting and household finance,
 - document management,
 - meal planning and household operations,
 - family communication formatting.
 
+## Skill quality expectations
+
+Each skill should define:
+
+- trigger conditions,
+- required tool usage and provenance,
+- output format and validation rules,
+- escalation/fallback behavior.
+
+## Community contribution model
+
+StewardOS invites expert contributions, including:
+
+- nutrition experts improving wellness skills,
+- professional investors improving investment workflows,
+- CPAs improving comptroller skills,
+- legal/estate professionals improving estate skills.
+
+Use:
+- [Skill Contribution Guide](../../community/skill-contribution-guide.md)
+- [CONTRIBUTING.md](../../../CONTRIBUTING.md)
+
 ## Governance
 
-- skills should be role-appropriate,
-- skills must not bypass persona boundaries,
-- skills should not embed live secrets or personal identifiers.
+- skills must respect persona boundaries,
+- no embedded live secrets or private identifiers,
+- contributions should include rationale and practical examples.

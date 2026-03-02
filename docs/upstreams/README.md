@@ -1,33 +1,37 @@
 # Upstream MCP Dependencies
 
-StewardOS references external MCP servers through pinned commits.
+StewardOS intentionally avoids vendoring third-party MCP server code in tracked repository content.
 
-## Why This Exists
+## Why this policy exists
 
-- avoids long-term vendoring overhead,
-- preserves provenance and licensing clarity,
-- makes local environments reproducible.
+- clearer license/provenance boundaries,
+- easier upstream sync and patch tracking,
+- reproducible dependency state via pinned commits.
 
-## Source of Truth
+## Source of truth
 
-`upstreams.lock.yaml` contains:
+`upstreams.lock.yaml` defines, per dependency:
 
-- local checkout path,
-- source repository URL,
+- checkout path,
+- remote and upstream URLs,
 - pinned commit SHA,
-- optional source branch reference for fork-only patch streams,
-- patch source (`upstream` or `fork`).
+- optional branch reference,
+- source type (`upstream` or `fork`).
 
-## Workflows
+## Operational workflow
 
-- bootstrap local checkouts: `scripts/bootstrap_upstreams.sh`
-- verify checkouts match pins: `scripts/verify_upstreams.sh`
+- bootstrap checkouts: `scripts/bootstrap_upstreams.sh`
+- verify local pins: `scripts/verify_upstreams.sh`
 
-## Patch Governance
+## Fork and patch governance
 
-If StewardOS requires behavior changes to upstream MCP servers:
+When behavior changes are needed:
 
-1. fork upstream,
-2. commit patch to fork,
-3. pin fork commit in lockfile,
-4. reference fork URL in this document and lockfile.
+1. patch in an explicit fork,
+2. pin fork commit SHA in lockfile,
+3. document rationale in PR/release notes,
+4. upstream improvements where practical.
+
+## Example outcome
+
+Public users can reproduce your MCP dependency graph exactly without manually rediscovering which fork/commit combinations are known-good.

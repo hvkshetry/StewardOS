@@ -1,28 +1,47 @@
 # MCP Servers
 
-StewardOS uses two MCP server classes:
+StewardOS uses MCP as the integration contract between agent runtimes and self-hosted/external systems.
 
-- first-party servers maintained in this repository,
-- upstream servers referenced via pinned commits/forks.
+## Server classes
 
-## First-Party MCP Servers
+- **First-party servers**: implemented in this repository for StewardOS-specific domains.
+- **Upstream servers**: pinned to reviewed commits via lockfile (including forks where patches are required).
 
-First-party servers in `servers/` implement domain-specific workflows (e.g., estate graph, finance graph, household tax, policy intelligence, health records).
+## Why this layer exists
 
-## Upstream MCP Servers
+MCP servers convert application/API complexity into stable tool interfaces that personas can consume safely and consistently.
 
-Upstream dependencies are not vendored in tracked content.
-Use:
+## First-party domain coverage
 
-- `docs/upstreams/upstreams.lock.yaml`,
-- `scripts/bootstrap_upstreams.sh`,
-- `scripts/verify_upstreams.sh`.
+Examples in this repo include:
 
-## Fork Policy
+- estate graph and planning servers,
+- finance graph and tax tooling,
+- portfolio analytics and policy-events servers,
+- health and household domain servers.
 
-When upstream MCP behavior is modified for StewardOS requirements:
+## Upstream dependency governance
 
-1. maintain a fork under the repository owner namespace,
-2. keep patch commits explicit and reviewable,
-3. pin fork commit SHA in lockfile,
-4. prefer upstream PRs where feasible.
+Source of truth:
+
+- `docs/upstreams/upstreams.lock.yaml`
+
+Operational scripts:
+
+- `scripts/bootstrap_upstreams.sh`
+- `scripts/verify_upstreams.sh`
+
+Fork policy:
+
+1. fork upstream under maintainer namespace,
+2. keep patches explicit and reviewable,
+3. pin exact commit SHA,
+4. prefer upstreaming patches when feasible.
+
+## Example
+
+An investment persona can use:
+
+- policy-events MCP tools for legislative/regulatory signal retrieval,
+- portfolio analytics tools for exposure/risk summaries,
+- ghostfolio tools for portfolio state reconciliation.

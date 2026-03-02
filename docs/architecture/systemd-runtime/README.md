@@ -1,24 +1,30 @@
 # systemd Runtime
 
-StewardOS uses systemd-managed services for host-level ingress and automation runtimes.
+StewardOS supports host-level service management with systemd for agent ingress/worker processes and related operational daemons.
 
-## Service Topology
+## Why systemd is used
 
-Primary host services include:
+Agent runtimes often need stable long-lived processes, controlled restart behavior, and journald-native observability.
+
+## Typical services
 
 - family-office ingress webhook service,
-- local mail worker/runtime service,
-- optional briefing/scheduler service,
-- tunnel/edge ingress service where applicable.
+- mail worker automation service,
+- family brief scheduler service,
+- optional host edge/tunnel services.
 
-## Deployment Pattern
+## Public deployment pattern
 
-- service unit templates are tracked as `*.service.example`,
-- production units remain local and host-specific,
-- deployment scripts should render user/path values per host.
+- tracked unit templates: `*.service.example`
+- rendered host units: local-only (not tracked)
+- host path/user values are substituted at deployment time
 
-## Reliability Expectations
+## Reliability and operations
 
-- restart policy enabled for long-running services,
-- health endpoints exposed for runtime checks,
-- logs routed through journald for operational troubleshooting.
+- restart policies enabled,
+- health endpoints used for smoke checks,
+- logs collected via journald.
+
+## Example
+
+A host can run Compose for platform applications while running agent ingress/worker via systemd to keep runtime isolation and easier lifecycle control.

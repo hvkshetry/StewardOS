@@ -1,17 +1,12 @@
 # Agent Personas
 
-StewardOS uses role-specific personas with explicit boundaries.
+StewardOS personas are operational roles with explicit authority boundaries.
 
-## Persona Model
+## Why personas exist
 
-Each persona defines:
+Real household and family-office workflows require different risk tolerances and tool access levels. Personas prevent over-broad automation and clarify accountability.
 
-- mission and responsibility scope,
-- approved MCP server access,
-- communication policy,
-- operational constraints and escalation behavior.
-
-## Current Persona Set
+## Persona roster
 
 - Chief of Staff
 - Estate Counsel
@@ -20,9 +15,26 @@ Each persona defines:
 - Investment Officer
 - Wellness Advisor
 
-## Boundary Design Principles
+## Persona contract
 
-- least-privilege MCP access,
-- clear ownership of write paths,
-- auditable routing for automated correspondence,
-- strict separation between personal read-only context and agent write channels.
+Each persona defines:
+
+- mission and scope,
+- approved MCP servers/tools,
+- communication style and escalation behavior,
+- write-path constraints and guardrails.
+
+## Boundary design principles
+
+- least privilege by default,
+- explicit routing of write actions,
+- separation of personal read-only context from agent write channels,
+- auditable identity and output expectations.
+
+## Example delegation model
+
+- Comptroller handles budget/tax-finance operations.
+- Wellness handles nutrition/fitness context and recommendations.
+- Estate Counsel manages entity/document/legal-operational workflows.
+
+Cross-domain decisions are coordinated through shared summaries rather than unrestricted tool overlap.
