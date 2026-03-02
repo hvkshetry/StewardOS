@@ -14,6 +14,8 @@ StewardOS is designed for recurring household/family-office operations, not one-
 
 Skills are stored under `skills/` and currently include:
 
+### Core shared skills
+
 - `budgeting`
 - `document-management`
 - `edu-planning`
@@ -21,7 +23,22 @@ Skills are stored under `skills/` and currently include:
 - `investing`
 - `meal-planning`
 
-Shared skill references and conventions live in `skills/shared/`.
+### Shared cross-persona support skills
+
+- `skills/shared/search`
+- `skills/shared/search-strategy`
+- `skills/shared/README.md`
+
+### Persona skill packs
+
+Persona-specific skills are now tracked in:
+
+- `skills/personas/chief-of-staff/*`
+- `skills/personas/estate-counsel/*`
+- `skills/personas/household-comptroller/*`
+- `skills/personas/household-director/*`
+- `skills/personas/investment-officer/*`
+- `skills/personas/wellness-advisor/*`
 
 ## Skill source layers (full ecosystem)
 
@@ -50,7 +67,7 @@ Common patterns:
 
 ### Layer 4: Global toolchain skill packs (`$CODEX_HOME/skills`)
 
-Global Codex skills are often installed as symlinks to plugin-managed skill packs (for example Anthropic example skills and Claude plugin skills).
+Global Codex skills are often installed as symlinks to plugin-managed skill packs (for example Anthropic example skills, Claude plugin skills, and optional knowledge/financial services skill packs).
 
 These are environment-level capabilities and are intentionally not vendored into this repository.
 
@@ -62,11 +79,9 @@ Based on the current reference deployment:
 - Runtime persona configs do use skill symlinks under `agent-configs/*/.codex/skills/`.
 - `$CODEX_HOME/skills` also uses symlinked plugin-provided skill packs.
 
-## About `knowledge-worker` and `financial-services`
+Runtime linking from tracked sources is bootstrapped with:
 
-- Those exact skill names are **not currently linked as active skill directories** in the reference StewardOS runtime.
-- Equivalent/adjacent capabilities are currently represented by skills such as `knowledge-synthesis`, `financial-planning`, and domain-specific investment/comptroller skills.
-- If you want explicit `knowledge-worker` and `financial-services` packs, add them as layer-3/layer-4 skills and list them in persona `AGENTS.md` contracts.
+- `scripts/bootstrap_persona_skills.sh`
 
 ## Skill contract in StewardOS
 

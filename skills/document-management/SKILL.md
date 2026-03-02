@@ -51,7 +51,7 @@ Use consistent title formatting for searchability:
 | Insurance | `[Type] Policy - [Provider] - [Policy#]` | `Health Policy - Star Health - 12345` |
 | Medical | `YYYY-MM-DD [Type] - [Provider/Doctor]` | `2026-02-15 Blood Test Results - Apollo Labs` |
 | Contracts | `[Type] Agreement - [Party] - YYYY` | `Rental Agreement - Landlord Name - 2026` |
-| Identity docs | `[Doc Type] - [Person]` | `Passport - Hersh` |
+| Identity docs | `[Doc Type] - [Person]` | `Passport - Family Member` |
 | Receipts | `YYYY-MM-DD Receipt - [Vendor] - [Amount]` | `2026-02-20 Receipt - Amazon - 4500` |
 
 ## Tagging Taxonomy

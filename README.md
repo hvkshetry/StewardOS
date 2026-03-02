@@ -81,7 +81,7 @@ StewardOS uses a layered skill ecosystem:
 - `servers/`: first-party MCP servers plus pinned upstream checkout paths.
 - `agent-configs/`: persona MCP/runtime configs (sanitized examples).
 - `agents/`: webhook ingress + worker/brief runtime services.
-- `skills/`: reusable cross-persona skills.
+- `skills/`: reusable skills (`core`, `shared`, and `personas/<persona>/` packs).
 - `docs/`: architecture, provisioning, and governance docs.
 
 ## Quick Start (Current)
@@ -95,6 +95,8 @@ StewardOS uses a layered skill ecosystem:
    - `scripts/bootstrap_upstreams.sh`
 5. Verify pinned MCP checkouts:
    - `scripts/verify_upstreams.sh`
+6. Link persona runtime skills from tracked `skills/` sources:
+   - `scripts/bootstrap_persona_skills.sh`
 
 ## Agent Runtime Compatibility
 

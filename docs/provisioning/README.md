@@ -72,11 +72,17 @@ bash provisioning/configure-systemd.sh
 
 Populate persona-local skill directories and any shared-skill symlinks required by your deployment.
 
-Examples:
+Recommended:
 
-- Link shared `family-email-formatting` into persona skill folders.
-- Link shared search/knowledge skills into the personas that require them.
-- Install optional global skill packs in `$CODEX_HOME/skills` when needed.
+```bash
+scripts/bootstrap_persona_skills.sh
+```
+
+This links tracked skill sources from `skills/` into `agent-configs/*/.codex/skills/` (runtime path), including shared skills such as `family-email-formatting` and chief-of-staff search skills.
+
+Optional:
+
+- Install additional global skill packs in `$CODEX_HOME/skills` when needed.
 
 ## How provisioning participates in workflows
 
