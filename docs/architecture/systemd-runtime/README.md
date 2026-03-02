@@ -1,30 +1,86 @@
 # systemd Runtime
 
-StewardOS supports host-level service management with systemd for agent ingress/worker processes and related operational daemons.
+StewardOS uses systemd for long-running agent-facing services (ingress, worker, scheduled briefing) while Compose handles the application stack.
 
-## Why systemd is used
+## Why this exists
 
-Agent runtimes often need stable long-lived processes, controlled restart behavior, and journald-native observability.
+The runtime needs always-on daemons with predictable restart behavior, host-native logging, and boot-time recovery.
 
-## Typical services
+systemd is used because it provides:
 
-- family-office ingress webhook service,
-- mail worker automation service,
-- family brief scheduler service,
-- optional host edge/tunnel services.
+- stable lifecycle management for Python/uvicorn processes,
+- restart policies and failure containment,
+- `journalctl` observability for service-level debugging,
+- clean separation from containerized data applications.
 
-## Public deployment pattern
+## What is currently configured
 
-- tracked unit templates: `*.service.example`
-- rendered host units: local-only (not tracked)
-- host path/user values are substituted at deployment time
+Tracked service templates:
 
-## Reliability and operations
+- [`agents/family-office-mail-ingress/family-office-mail-ingress.service.example`](../../../agents/family-office-mail-ingress/family-office-mail-ingress.service.example)
+- [`agents/family-office-mail-worker/family-office-mail-worker.service.example`](../../../agents/family-office-mail-worker/family-office-mail-worker.service.example)
+- [`agents/family-brief-agent/family-brief-agent.service.example`](../../../agents/family-brief-agent/family-brief-agent.service.example)
 
-- restart policies enabled,
-- health endpoints used for smoke checks,
-- logs collected via journald.
+Template rendering/installation is automated by:
 
-## Example
+- [`provisioning/configure-systemd.example.sh`](../../../provisioning/configure-systemd.example.sh)
 
-A host can run Compose for platform applications while running agent ingress/worker via systemd to keep runtime isolation and easier lifecycle control.
+### Runtime topology
+
+- Ingress service binds loopback `:8311` and validates webhook envelopes.
+- Worker service binds loopback `:8312` and executes persona workflows.
+- Brief service binds loopback `:8300` for scheduled/context brief generation.
+- Compose-hosted systems remain separate and are consumed through MCP/tool calls.
+
+## How this layer participates in workflows
+
+### 1. Gmail automation path
+
+1. External push arrives at ingress endpoint.
+2. Ingress validates and forwards internally to worker.
+3. Worker resolves persona and invokes runtime tools.
+4. Response path is written to mailbox via configured MCP servers.
+
+### 2. Daily/weekly brief path
+
+1. Brief service runs scheduled jobs and gathers context.
+2. It invokes configured agent runtime with persona rules.
+3. Output is delivered through configured communication channels.
+
+## Operations and observability
+
+Typical commands (host):
+
+```bash
+sudo systemctl status family-office-mail-ingress
+sudo systemctl status family-office-mail-worker
+sudo systemctl status family-brief-agent
+sudo journalctl -u family-office-mail-worker -n 200 --no-pager
+```
+
+Expected operational posture:
+
+- `Restart=always` for core daemons.
+- Loopback binds by default.
+- Environment loaded from local `.env` files where configured.
+
+## Customization and extension
+
+### Add a new runtime daemon
+
+1. Add app code under `agents/<service-name>/`.
+2. Create `<service-name>.service.example` with placeholder user/paths.
+3. Extend provisioning template script to render/install the new unit.
+4. Document port, health endpoint, and failure behavior.
+
+### Harden runtime boundaries
+
+- Run as dedicated non-root system user.
+- Keep public ingress through a controlled reverse proxy only.
+- Add health probes and lightweight smoke checks for each service.
+
+## Boundaries
+
+- systemd runtime manages process lifecycle only.
+- It does not define persona behavior, skill logic, or tool access policy.
+- Those contracts remain in `agent-configs/`, `skills/`, and MCP server configs.
