@@ -1,0 +1,32 @@
+# Cloudflare Tunnel configuration template for StewardOS.
+# Replace PERSONAL_TUNNEL_ID with your tunnel ID.
+
+tunnel: PERSONAL_TUNNEL_ID
+credentials-file: /etc/cloudflared/PERSONAL_TUNNEL_ID.json
+
+ingress:
+  - hostname: vault.example.com
+    service: http://vaultwarden:80
+  - hostname: docs.example.com
+    service: http://paperless-ngx:8000
+  - hostname: invest.example.com
+    service: http://ghostfolio:3333
+  - hostname: meals.example.com
+    service: http://mealie:9000
+  - hostname: budget.example.com
+    service: http://actual-budget:5006
+  - hostname: notes.example.com
+    service: http://memos:5230
+  - hostname: home.example.com
+    service: http://homebox:7745
+  - hostname: alerts.example.com
+    service: http://changedetection:5000
+  - hostname: pantry.example.com
+    service: http://grocy:80
+  - hostname: agent.example.com
+    service: http://host.docker.internal:8300
+  - hostname: agent-mail.example.com
+    service: http://localhost:8311
+  - hostname: fitness.example.com
+    service: http://wger-nginx:80
+  - service: http_status:404

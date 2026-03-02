@@ -1,0 +1,44 @@
+{
+  "cos": {
+    "label": "Chief of Staff",
+    "accent": "#1F4E79",
+    "accent_dark": "#173B5C",
+    "signature": "Chief of Staff Agent",
+    "footer": "Family Office Operations"
+  },
+  "estate": {
+    "label": "Estate Counsel",
+    "accent": "#2E5B3A",
+    "accent_dark": "#21452B",
+    "signature": "Estate Counsel",
+    "footer": "Family Office Legal and Estate"
+  },
+  "hc": {
+    "label": "Household Comptroller",
+    "accent": "#8A5A12",
+    "accent_dark": "#6F470E",
+    "signature": "Household Comptroller",
+    "footer": "Family Office Finance"
+  },
+  "hd": {
+    "label": "Household Director",
+    "accent": "#0B7285",
+    "accent_dark": "#085563",
+    "signature": "Household Director",
+    "footer": "Family Office Household Operations"
+  },
+  "io": {
+    "label": "Investment Officer",
+    "accent": "#174A7E",
+    "accent_dark": "#123A63",
+    "signature": "Investment Officer",
+    "footer": "Family Office Investments"
+  },
+  "wellness": {
+    "label": "Wellness Advisor",
+    "accent": "#2F6D5E",
+    "accent_dark": "#235244",
+    "signature": "Wellness Advisor",
+    "footer": "Family Office Wellness"
+  }
+}

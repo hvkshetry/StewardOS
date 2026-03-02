@@ -1,0 +1,43 @@
+model = "gpt-5.3-codex"
+model_reasoning_effort = "xhigh"
+approval_policy = "never"
+
+[mcp_servers.google-workspace]
+command = "uv"
+args = ["run", "python", "-m", "google_workspace_mcp"]
+cwd = "/path/to/stewardos/servers/google-workspace-mcp"
+env = { GOOGLE_TOKEN_PATH = "/path/to/stewardos/agents/family-brief-agent/.google-token.json" }
+enabled_tools = ["gmail_send_email", "gmail_search_emails", "gmail_get_email", "calendar_list_events", "calendar_get_event"]
+
+[mcp_servers.mealie]
+command = "uv"
+args = ["run", "python", "server.py"]
+cwd = "/path/to/stewardos/servers/mealie-mcp"
+env = { MEALIE_URL = "http://localhost:9925", MEALIE_API_TOKEN = "${MEALIE_API_TOKEN}" }
+enabled_tools = ["get_todays_meal_plan", "get_shopping_list"]
+
+[mcp_servers.actual-budget]
+command = "npx"
+args = ["actual-mcp"]
+env = { ACTUAL_SERVER_URL = "http://localhost:5006" }
+enabled_tools = ["get_budget_summary", "get_transactions"]
+
+[mcp_servers.grocy]
+command = "uv"
+args = ["run", "python", "server.py"]
+cwd = "/path/to/stewardos/servers/grocy-mcp"
+env = { GROCY_URL = "http://localhost:9283", GROCY_API_KEY = "${GROCY_API_KEY}" }
+enabled_tools = ["get_stock_overview", "get_missing_products"]
+
+[mcp_servers.family-edu]
+command = "uv"
+args = ["run", "python", "server.py"]
+cwd = "/path/to/stewardos/servers/family-edu-mcp"
+enabled_tools = ["get_activities_for_age", "get_weekly_plan"]
+
+[mcp_servers.oura]
+command = "uv"
+args = ["run", "python", "server.py"]
+cwd = "/path/to/stewardos/servers/oura-mcp"
+env = { OURA_CLIENT_ID = "${OURA_CLIENT_ID}", OURA_CLIENT_SECRET = "${OURA_CLIENT_SECRET}", OURA_TOKEN_PATH = "/path/to/stewardos/servers/oura-mcp/.oura-token.json" }
+enabled_tools = ["get_daily_readiness", "get_sleep_summary"]

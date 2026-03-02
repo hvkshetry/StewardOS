@@ -1,0 +1,16 @@
+[Unit]
+Description=Family Office Mail Ingress
+After=network.target
+
+[Service]
+Type=simple
+User=REPLACE_WITH_SYSTEM_USER
+WorkingDirectory=/opt/stewardos/agents/family-office-mail-ingress
+EnvironmentFile=-/opt/stewardos/agents/family-office-mail-ingress/.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/stewardos/agents/family-office-mail-ingress/.venv/bin/uvicorn src.main:app --host 127.0.0.1 --port 8311
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

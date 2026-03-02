@@ -1,0 +1,15 @@
+[Unit]
+Description=Family Brief Agent
+After=network.target docker.service
+
+[Service]
+Type=simple
+User=REPLACE_WITH_SYSTEM_USER
+WorkingDirectory=/opt/stewardos/agents/family-brief-agent
+ExecStart=/opt/stewardos/agents/family-brief-agent/.venv/bin/uvicorn src.main:app --host 127.0.0.1 --port 8300
+Restart=always
+RestartSec=10
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=multi-user.target

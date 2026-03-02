@@ -1,82 +1,95 @@
+# Environment
+.env
+.env.*
+!.env.example
+!.env.template
+!.env.*.example
+
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
+*.pyc
+*.pyo
+.venv/
 venv/
-ENV/
-openbb/
 *.egg-info/
-.pytest_cache/
+
+# Node
+node_modules/
+
+# OpenBB (large venv, managed separately)
+servers/investing-workspace/openbb/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Secrets & credentials
+*.json.bak
+*token*.json
+*credential*.json
+*secret*.json
+client_secret_*.json
 
 # IDE
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# Logs
-*.log
+# OS
+.DS_Store
+Thumbs.db
 
-# Data files
-*.csv
-*.xlsx
-*.db
+# Docker volumes (managed by Docker, not git)
+services/*/data/
+services/*/volumes/
 
-# Test files
-test_*.py
-tests/
+# Backup artifacts
+*.tar.gz
+*.bak
 
-# Personal settings and configs
-.env
-.env.local
-.mcp.json
-user_settings.json
-.openbb_platform/
-personal_settings.yaml
-mcp_config.json
-C:\\Users\\*
-"C:\\Users\\*"
+# uv
+uv.lock
 
-# Development documentation
-MCP_ARCHITECTURE_GUIDE.md
-PROJECT_STATUS.md
-DRAFT_*.md
-*_BACKUP.md
+# --- StewardOS: local runtime state and sensitive production files ---
 
-# Data files (keep sample data out of repo)
-sample_portfolio.json
+# Codex runtime state (keep sanitized examples only)
+agent-configs/**/.codex/**
+!agent-configs/**/.codex/
+!agent-configs/**/.codex/config.toml.example
+agents/**/.codex/**
+!agents/**/.codex/
+!agents/**/.codex/config.toml.example
 
-# Cache and state files
-shared/cache/*.json
-!shared/cache/.gitkeep
-portfolio-state-mcp-server/state/*.json
-!portfolio-state-mcp-server/state/portfolio_state.example.json
-!portfolio-state-mcp-server/state/.gitkeep
-data/*:Zone.Identifier
+# Agent credential directories and shared OAuth artifacts
+agent-configs/**/.google-creds-*/
+agent-configs/.shared-google-creds-*/
+agent-configs/.env.google-oauth
 
-# Runs and session data
-runs/
-sessions/
+# Persona runtime outputs
+agent-configs/**/output/
+agent-configs/*/AGENTS.md
 
-# Codex session logs
-.codex/
+# Live env/config state
+agents/**/.env
+servers/**/.env
+servers/**/.env.oauth21
+servers/investing-workspace/.mcp.json
+.claude/settings.local.json
 
-# Matplotlib config cache
-.mplconfig/
+# Local worker/database state
+agents/family-office-mail-worker/family_office_mail_worker.db
+servers/**/mcp_server_debug.log
+servers/**/mealie_mcp_server.log
+servers/**/.beads/
+agents/*/*.service
+!agents/*/*.service.example
 
-# Virtual environment
-.venv/
-
-# Oracle build artifacts (keep only source)
-oracle/__pycache__/
-oracle/*.pyc
-git_push_command.txt
-push_to_github.*
-*_backup_*.json
-test_results_*.json
-debug.json
-debug.py
-/openbb/
+# Ignore vendored upstream source directories in this repository.
+# Use docs/upstreams + scripts/bootstrap_upstreams.sh to fetch pinned versions.
+servers/actual-mcp/
+servers/apple-health-mcp/
+servers/google-workspace-mcp/
+servers/mealie-mcp/
+servers/oura-mcp/
+servers/paperless-mcp/
+servers/investing-workspace/sec-edgar/

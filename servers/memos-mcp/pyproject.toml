@@ -1,0 +1,6 @@
+[project]
+name = "memos-mcp"
+version = "0.1.0"
+description = "MCP server for Memos note-taking and journaling"
+requires-python = ">=3.10"
+dependencies = ["mcp>=1.0.0", "httpx>=0.26.0"]

@@ -1,0 +1,11 @@
+# Secrets
+.env
+
+# Data directories
+data/
+volumes/
+
+# Backup artifacts
+*.tar.gz
+*.sql
+*.sql.gz

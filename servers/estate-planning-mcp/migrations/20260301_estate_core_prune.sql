@@ -1,0 +1,24 @@
+BEGIN;
+
+SET search_path TO estate;
+
+DROP TABLE IF EXISTS ocf_positions CASCADE;
+DROP TABLE IF EXISTS ocf_instruments CASCADE;
+DROP TABLE IF EXISTS ocf_documents CASCADE;
+
+DROP TABLE IF EXISTS xbrl_facts CASCADE;
+DROP TABLE IF EXISTS xbrl_units CASCADE;
+DROP TABLE IF EXISTS xbrl_contexts CASCADE;
+DROP TABLE IF EXISTS xbrl_concepts CASCADE;
+DROP TABLE IF EXISTS xbrl_reports CASCADE;
+
+DROP TABLE IF EXISTS balance_sheet_facts CASCADE;
+DROP TABLE IF EXISTS cash_flow_statement_facts CASCADE;
+DROP TABLE IF EXISTS income_statement_facts CASCADE;
+DROP TABLE IF EXISTS reporting_periods CASCADE;
+
+DROP TABLE IF EXISTS valuation_comps CASCADE;
+DROP TABLE IF EXISTS valuation_observations CASCADE;
+DROP TABLE IF EXISTS valuation_methods CASCADE;
+
+COMMIT;

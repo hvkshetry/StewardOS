@@ -1,0 +1,47 @@
+version: 1
+repositories:
+  - name: actual-mcp
+    path: servers/actual-mcp
+    remote: https://github.com/hvkshetry/actual-mcp.git
+    upstream: https://github.com/s-stefanov/actual-mcp.git
+    commit: bbd70d4b437ad2cc95556dbf46729716f9c81a30
+    ref: stewardos-patches
+    source: fork
+  - name: apple-health-mcp
+    path: servers/apple-health-mcp
+    remote: https://github.com/neiltron/apple-health-mcp.git
+    upstream: https://github.com/neiltron/apple-health-mcp.git
+    commit: 947ccfa4a0fa33fab0d6ef8335e185caa660674a
+    source: upstream
+  - name: google-workspace-mcp
+    path: servers/google-workspace-mcp
+    remote: https://github.com/taylorwilsdon/google_workspace_mcp.git
+    upstream: https://github.com/taylorwilsdon/google_workspace_mcp.git
+    commit: 9631b9e3eb345cbafbddcc3cc464008d9dee9dd1
+    source: upstream
+  - name: mealie-mcp-server
+    path: servers/mealie-mcp
+    remote: https://github.com/hvkshetry/mealie-mcp-server.git
+    upstream: https://github.com/rldiao/mealie-mcp-server.git
+    commit: dbc61850238e8f8f7864a12abd677e232a768412
+    ref: stewardos-patches
+    source: fork
+  - name: oura-mcp
+    path: servers/oura-mcp
+    remote: https://github.com/hvkshetry/oura-mcp.git
+    upstream: https://github.com/elizabethtrykin/oura-mcp.git
+    commit: fcf80cf3c82cb2841ac09b51d79f4ffdf9e0f0e8
+    source: fork
+  - name: paperless-mcp
+    path: servers/paperless-mcp
+    remote: https://github.com/hvkshetry/paperless-mcp.git
+    upstream: https://github.com/nloui/paperless-mcp.git
+    commit: c7a93382f8d162464c02f89476bf021a0668ef30
+    source: fork
+  - name: sec-edgar-mcp
+    path: servers/investing-workspace/sec-edgar
+    remote: https://github.com/hvkshetry/sec-edgar-mcp.git
+    upstream: https://github.com/stefanoamorelli/sec-edgar-mcp.git
+    commit: d00d370647dc8a91b29679c42f0a99faca26875b
+    ref: stewardos-patches
+    source: fork

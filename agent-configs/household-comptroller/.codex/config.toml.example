@@ -1,0 +1,48 @@
+model = "gpt-5.3-codex"
+model_reasoning_effort = "xhigh"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = true
+
+[mcp_servers.google-workspace-personal-ro]
+command = "/path/to/stewardos/servers/google-workspace-mcp/.venv/bin/python"
+args = ["main.py", "--single-user", "--read-only"]
+cwd = "/path/to/stewardos/servers/google-workspace-mcp"
+startup_timeout_sec = 60
+env = { WORKSPACE_MCP_CREDENTIALS_DIR = "/path/to/stewardos/agent-configs/.shared-google-creds-personal-ro", USER_GOOGLE_EMAIL = "personal.user@example.com", WORKSPACE_MCP_PORT = "8016", GOOGLE_OAUTH_CLIENT_ID = "${GOOGLE_OAUTH_CLIENT_ID}", GOOGLE_OAUTH_CLIENT_SECRET = "${GOOGLE_OAUTH_CLIENT_SECRET}" }
+
+[mcp_servers.google-workspace-agent-rw]
+command = "/path/to/stewardos/servers/google-workspace-mcp/.venv/bin/python"
+args = ["main.py", "--single-user", "--tools", "gmail"]
+cwd = "/path/to/stewardos/servers/google-workspace-mcp"
+startup_timeout_sec = 60
+env = { WORKSPACE_MCP_CREDENTIALS_DIR = "/path/to/stewardos/agent-configs/.shared-google-creds-agent-rw", USER_GOOGLE_EMAIL = "agent.mailbox@example.com", WORKSPACE_MCP_PORT = "8017", GOOGLE_OAUTH_CLIENT_ID = "${GOOGLE_OAUTH_CLIENT_ID}", GOOGLE_OAUTH_CLIENT_SECRET = "${GOOGLE_OAUTH_CLIENT_SECRET}" }
+
+[mcp_servers.actual-budget]
+command = "node"
+args = ["/path/to/stewardos/servers/actual-mcp/build/index.js"]
+cwd = "/path/to/stewardos/servers/actual-mcp"
+startup_timeout_sec = 180
+env = { ACTUAL_SERVER_URL = "http://localhost:5006", ACTUAL_PASSWORD = "${ACTUAL_PASSWORD}", ACTUAL_BUDGET_SYNC_ID = "${ACTUAL_BUDGET_SYNC_ID}", ACTUAL_DATA_DIR = "/tmp/actual-mcp-data" }
+
+[mcp_servers.household-tax]
+command = "/path/to/stewardos/servers/household-tax-mcp/.venv/bin/python"
+args = ["server.py"]
+cwd = "/path/to/stewardos/servers/household-tax-mcp"
+startup_timeout_sec = 120
+
+[mcp_servers.finance-graph]
+command = "uv"
+args = ["run", "python", "server.py"]
+cwd = "/path/to/stewardos/servers/finance-graph-mcp"
+startup_timeout_sec = 120
+env = { RENTCAST_BASE_URL = "https://api.rentcast.io/v1", RENTCAST_API_KEY = "${RENTCAST_API_KEY}" }
+
+[mcp_servers.ghostfolio]
+command = "/path/to/stewardos/servers/ghostfolio-mcp/.venv/bin/python"
+args = ["server.py"]
+cwd = "/path/to/stewardos/servers/ghostfolio-mcp"
+startup_timeout_sec = 120
+env = { GHOSTFOLIO_URL = "http://localhost:8224", GHOSTFOLIO_TOKEN = "${GHOSTFOLIO_TOKEN}" }

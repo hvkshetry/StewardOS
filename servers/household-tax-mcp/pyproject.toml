@@ -1,0 +1,6 @@
+[project]
+name = "household-tax-mcp"
+version = "0.1.0"
+description = "MCP server for US household income tax estimation using PolicyEngine"
+requires-python = ">=3.10"
+dependencies = ["mcp>=1.0.0", "policyengine-us>=1.0.0"]

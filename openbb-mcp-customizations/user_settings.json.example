@@ -1,7 +1,0 @@
-{
-  "credentials": {
-    "fred_api_key": "YOUR_FRED_API_KEY_HERE",
-    "bls_api_key": "YOUR_BLS_API_KEY_HERE",
-    "fmp_api_key": "YOUR_FMP_API_KEY_HERE"
-  }
-}

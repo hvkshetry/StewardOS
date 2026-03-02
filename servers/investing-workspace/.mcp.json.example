@@ -1,0 +1,49 @@
+{
+  "mcpServers": {
+    "market-intel-direct": {
+      "type": "stdio",
+      "command": "/path/to/python",
+      "args": [
+        "/path/to/investing-workspace/market-intel-direct/server.py"
+      ],
+      "env": {
+        "FRED_API_KEY": "your_fred_key"
+      }
+    },
+    "sec-edgar": {
+      "type": "stdio",
+      "command": "/path/to/python",
+      "args": [
+        "/path/to/investing-workspace/sec-edgar/consolidated_server.py"
+      ],
+      "cwd": "/path/to/investing-workspace/sec-edgar",
+      "env": {
+        "EDGAR_LOCAL_DATA_DIR": "/tmp/sec-edgar-data",
+        "EDGAR_CACHE_DIR": "/tmp/sec-edgar-cache"
+      }
+    },
+    "portfolio-analytics": {
+      "type": "stdio",
+      "command": "/path/to/python",
+      "args": [
+        "/path/to/investing-workspace/portfolio-analytics/server.py"
+      ],
+      "env": {
+        "GHOSTFOLIO_URL": "http://localhost:8224",
+        "GHOSTFOLIO_TOKEN": "your_ghostfolio_jwt"
+      }
+    },
+    "policy-events-service": {
+      "type": "stdio",
+      "command": "/path/to/python",
+      "args": [
+        "/path/to/investing-workspace/policy-events/server.py"
+      ],
+      "env": {
+        "PYTHONPATH": "/path/to/investing-workspace",
+        "CONGRESS_API_KEY": "your_congress_key",
+        "GOVINFO_API_KEY": "your_govinfo_key"
+      }
+    }
+  }
+}

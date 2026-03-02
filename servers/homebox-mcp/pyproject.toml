@@ -1,0 +1,6 @@
+[project]
+name = "homebox-mcp"
+version = "0.1.0"
+description = "MCP server for Homebox home inventory management"
+requires-python = ">=3.10"
+dependencies = ["fastmcp>=2.0", "httpx>=0.26.0"]

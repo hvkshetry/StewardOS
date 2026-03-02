@@ -1,0 +1,1 @@
+Shared references used by multiple personal skills (budgeting, meal-planning, edu-planning, document-management, investing). Place cross-cutting reference files here when they are relevant to more than one skill.
