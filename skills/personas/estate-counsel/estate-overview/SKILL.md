@@ -8,30 +8,38 @@ description: |
 
 # Estate Overview
 
-## Tool Mapping (estate-graph-mcp)
+## Tool Mapping (estate-planning + finance-graph)
 
 | Task | Tool |
 |------|------|
-| List family members | `list_people` |
-| Person details + ownership | `get_person` |
-| List entities | `list_entities` (filter by type, jurisdiction, status) |
-| Entity details | `get_entity` (ownership, documents, critical dates) |
-| List assets | `list_assets` (filter by type, jurisdiction, owner) |
-| Ownership hierarchy | `get_ownership_graph` (full graph or per-person transitive) |
-| Net worth | `get_net_worth` (by person, jurisdiction, or total) |
-| Critical dates | `get_upcoming_dates` (next N days) |
-| Link document | `link_document` (connect Paperless doc to entity/asset) |
+| List family members | `estate-planning.list_people` |
+| Person details + ownership | `estate-planning.get_person` |
+| List entities | `estate-planning.list_entities` (filter by type, jurisdiction, status) |
+| Entity details | `estate-planning.get_entity` (ownership, documents, critical dates) |
+| List assets (ownership snapshot) | `estate-planning.list_assets` (filter by type, jurisdiction, owner) |
+| Ownership hierarchy | `estate-planning.get_ownership_graph` (full graph or per-person transitive) |
+| Net worth | `estate-planning.get_net_worth` (by person, jurisdiction, or total) |
+| Critical dates | `estate-planning.get_upcoming_dates` (next N days) |
+| Link document | `estate-planning.link_document` (connect Paperless doc to entity/asset) |
+| Valuation history / finance facts | `finance-graph.list_valuation_observations` and related finance tools |
+
+## Routing Boundary
+
+- Use `estate-planning` for legal ownership, succession structure, and compliance-state reporting.
+- Use `finance-graph` for valuation history and statement facts (PL/CFS/BS, XBRL/OCF).
+- Do not write finance-fact payloads back into estate-planning records.
+- If tax modeling is needed from this workflow, hand off to `household-tax`.
 
 ## Full Estate Snapshot Workflow
 
 ### Step 1: People
 
-`list_people` — all family members with citizenship and residency status.
-For each person of interest: `get_person` for entity ownership and linked documents.
+`estate-planning.list_people` — all family members with citizenship and residency status.
+For each person of interest: `estate-planning.get_person` for entity ownership and linked documents.
 
 ### Step 2: Entity Hierarchy
 
-`list_entities` — all trusts, LLCs, corps, HUFs with status and jurisdiction.
+`estate-planning.list_entities` — all trusts, LLCs, corps, HUFs with status and jurisdiction.
 Group by:
 - Jurisdiction (US entities vs India entities)
 - Type (trusts vs operating entities vs holding entities)
@@ -39,13 +47,14 @@ Group by:
 
 ### Step 3: Ownership Graph
 
-`get_ownership_graph` — full ownership hierarchy showing who owns what.
-For a specific person: `get_ownership_graph(person_id=X)` for transitive ownership
+`estate-planning.get_ownership_graph` — full ownership hierarchy showing who owns what.
+For a specific person: `estate-planning.get_ownership_graph(person_id=X)` for transitive ownership
 (A owns B owns C → A effectively owns C with computed percentage).
 
 ### Step 4: Assets
 
-`list_assets` — all assets with valuations and owners.
+`estate-planning.list_assets` — all assets with current valuation snapshots and owners.
+Use `finance-graph` valuation-observation tools when trend history is needed.
 Group by:
 - Type (real estate, securities, bank accounts, vehicles)
 - Jurisdiction
@@ -53,12 +62,12 @@ Group by:
 
 ### Step 5: Net Worth
 
-`get_net_worth` — aggregated by jurisdiction and currency.
+`estate-planning.get_net_worth` — aggregated by jurisdiction and currency.
 For a specific person: includes both direct and indirect (through entity) ownership.
 
 ### Step 6: Critical Dates
 
-`get_upcoming_dates(days=90)` — filing deadlines, renewals, distributions, reviews.
+`estate-planning.get_upcoming_dates(days=90)` — filing deadlines, renewals, distributions, reviews.
 Flag overdue items (due_date < today).
 
 ## Output Format

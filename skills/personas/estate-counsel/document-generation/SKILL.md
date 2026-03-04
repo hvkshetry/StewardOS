@@ -10,9 +10,17 @@ description: |
 
 ## Approach
 
-Use python-docx + Jinja2 templates stored in `/path/to/stewardos/servers/estate-graph-mcp/templates/`.
+Use python-docx + Jinja2 templates stored in `~/personal/servers/estate-planning-mcp/templates/`.
 This is more flexible than Docassemble for family office documents that require
 customization per entity and jurisdiction.
+
+## Tool Routing
+
+- `estate-planning`: entity/person/ownership context and document linkage metadata
+- `paperless`: uploaded document storage, tags, correspondents, and retrieval
+- `household-tax`: only when tax-language assumptions are required for narrative sections
+- `finance-graph`: only when valuation history must be cited inside a document appendix
+- Do not write finance-fact payloads into estate-planning document metadata
 
 ## Template Types
 
@@ -29,7 +37,7 @@ customization per entity and jurisdiction.
 
 ### Step 1: Gather Data from Estate Graph
 
-Query estate-graph-mcp for:
+Query `estate-planning` for:
 - Entity details: `get_entity` (name, type, jurisdiction, formation date, grantor, trustee)
 - People details: `get_person` (legal name, address, tax ID)
 - Ownership: `get_ownership_graph` (current ownership structure)
@@ -44,7 +52,7 @@ Match the document need to a template. If no template exists:
 
 ### Step 3: Fill Template Variables
 
-Map estate-graph data to template variables:
+Map estate-planning data to template variables:
 - Legal names (not preferred names)
 - Full addresses
 - Tax IDs (only when required by the document type)
@@ -67,7 +75,15 @@ Via paperless tools:
 2. Title: `[Doc Type] - [Entity Name] - YYYY-MM-DD`
 3. Tags: `legal`, appropriate secondary tags
 4. Correspondent: The entity or attorney
-5. Link in estate-graph: `link_document` to associate with entity/asset
+5. Link in estate-planning: `link_document` (or `upsert_document_metadata`) to associate with entity/asset
+
+## Output Contract
+
+Return:
+- Generated document filename and template used
+- Linked `paperless_doc_id`
+- Linked estate object IDs (`entity_id` / `asset_id` / `person_id`)
+- Open attorney-review flags (witness/notary/jurisdiction-specific checks)
 
 ## Important Constraints
 

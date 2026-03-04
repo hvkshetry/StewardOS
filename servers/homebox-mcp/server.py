@@ -21,10 +21,17 @@ mcp = FastMCP(
 )
 
 
+def _normalize_token(token: str) -> str:
+    token = token.strip()
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    return token
+
+
 def _client(auth: bool = True) -> httpx.AsyncClient:
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     if auth and _token:
-        headers["Authorization"] = f"Bearer {_token}"
+        headers["Authorization"] = f"Bearer {_normalize_token(_token)}"
     return httpx.AsyncClient(
         base_url=HOMEBOX_URL,
         headers=headers,
@@ -42,7 +49,7 @@ async def _login() -> None:
         )
         resp.raise_for_status()
         data = resp.json()
-        _token = data.get("token", "")
+        _token = _normalize_token(data.get("token", ""))
 
 
 async def _request(method: str, path: str, **kwargs) -> dict | list | str:

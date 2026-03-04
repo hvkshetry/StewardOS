@@ -17,11 +17,18 @@ This skill covers:
 - Required Minimum Distribution (RMD) tracking
 - Cross-border succession considerations (US + India)
 
+## Tool Routing
+
+- Use `estate-planning` for succession structures, beneficiary links, entity roles, ownership paths, and legal-document metadata.
+- Use `finance-graph` only for valuation-history or statement-fact inputs when sizing distributions/exposure.
+- Use `household-tax` for tax-impact scenario analysis tied to succession alternatives.
+- Keep legal/entity updates in `estate-planning`; do not store finance-fact payloads there.
+
 ## Beneficiary Review Workflow
 
 ### Step 1: Inventory All Beneficiary-Bearing Accounts
 
-Query estate-graph for assets that have beneficiary designations:
+Query estate-planning for assets that have beneficiary designations:
 - Retirement accounts (IRA, 401k, Roth IRA)
 - Life insurance policies
 - Transfer-on-death (TOD) brokerage accounts
@@ -64,7 +71,7 @@ For each trust entity:
 For inherited retirement accounts held in trust:
 - Annual RMD calculations based on beneficiary age
 - 10-year distribution rule (SECURE Act) applicability
-- Track RMDs as critical dates in estate-graph
+- Track RMDs as critical dates in estate-planning
 
 ## Succession Path Mapping
 
@@ -121,4 +128,5 @@ Using `get_ownership_graph`:
 - **Not legal advice** — flag complex succession questions for attorney review
 - **Jurisdiction awareness** — always note which country's laws apply
 - **Keep current** — succession plans should be reviewed annually and after major life events
-- **Document everything** — link all beneficiary designations and succession documents to estate-graph
+- **Document everything** — link all beneficiary designations and succession documents to estate-planning
+- **Provenance first** — cite which system produced each key input (estate-planning, finance-graph, household-tax)

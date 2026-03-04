@@ -12,7 +12,7 @@ Estimate investment outcomes for illiquid holdings under multiple scenarios.
 
 - Public comp valuation anchors: `sec-edgar.sec_edgar_financial`, `sec-edgar.sec_edgar_company`
 - Macro/rates assumptions: `market-intel-direct.get_market_snapshot`, `market-intel-direct.get_fred_series`
-- Tax scenario overlay: `household-tax.compare_tax_scenarios`
+- Tax scenario overlay: `household-tax.compare_scenarios`
 
 ## Workflow
 

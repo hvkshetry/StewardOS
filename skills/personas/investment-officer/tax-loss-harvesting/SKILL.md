@@ -10,7 +10,7 @@ user-invocable: false
 
 - Taxable-scope validation and candidate scan: `portfolio-analytics.validate_account_taxonomy`, `portfolio-analytics.find_tax_loss_harvesting_candidates`
 - Realized activity context: `ghostfolio.portfolio(operation="performance", range="1y")`
-- Tax impact comparisons: `household-tax.compare_tax_scenarios`
+- Tax impact comparisons: `household-tax.compare_scenarios`
 
 ## Workflow
 
@@ -34,7 +34,7 @@ user-invocable: false
 
 - Pull realized gains/loss context from tax records and budget data
 - Prioritize losses where marginal tax benefit is highest
-- Use `household-tax.compare_tax_scenarios` for before/after comparisons on proposed harvest sets.
+- Use `household-tax.compare_scenarios` for before/after comparisons on proposed harvest sets.
 
 ### Step 4: Replacement Selection
 

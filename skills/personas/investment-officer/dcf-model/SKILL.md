@@ -12,7 +12,7 @@ Build a transparent intrinsic valuation for public or private holdings.
 
 - Historical financial anchors: `sec-edgar.sec_edgar_financial`
 - Macro/rate assumptions: `market-intel-direct.get_fred_series`, `market-intel-direct.get_market_snapshot`
-- Tax assumptions: `household-tax.compare_tax_scenarios` (for after-tax view)
+- Tax assumptions: `household-tax.compare_scenarios` (for after-tax view)
 
 ## Workflow
 

@@ -39,6 +39,13 @@ description: |
 
 ## Compliance Check Workflow
 
+## Tool Routing
+
+- Primary system: `estate-planning` for entities, critical dates, ownership paths, and linked legal docs.
+- Tax planning overlays: `household-tax` for estimated payments, scenario analysis, and filing-readiness views.
+- Finance facts: `finance-graph` only when underlying valuation/statement context is required to explain a compliance risk.
+- Do not treat `finance-graph` analytics as a substitute for household-tax scenario outputs.
+
 ### Step 1: List Active Entities
 
 `list_entities(status='active')` — all entities requiring compliance attention.
@@ -55,7 +62,7 @@ For each active entity, verify:
 2. **K-1s distributed**: (For pass-through entities) Are K-1s sent to all owners?
 3. **State filings**: Annual report filed? Franchise tax paid?
 4. **Registered agent**: Current and renewed?
-5. **Documents**: Is the operating agreement / trust document linked in estate-graph?
+5. **Documents**: Is the operating agreement / trust document linked in estate-planning?
 
 ### Step 4: Output
 
@@ -81,6 +88,10 @@ For each active entity, verify:
 ### Gaps
 [Entities missing critical dates entries, documents, or agent info]
 ```
+
+Always append:
+- **Provenance**: which MCPs were used (`estate-planning`, `household-tax`, optional `finance-graph`)
+- **Confidence notes**: missing data fields that could change the recommendation
 
 ## K-1 Tracking
 

@@ -171,6 +171,19 @@ def _normalize_currency_code(code: str | None) -> str | None:
     return normalized
 
 
+def _parse_iso_date(value: str | None, field_name: str) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"Invalid {field_name}: {value}") from exc
+
+
+def _normalize_identifier_type(value: str) -> str:
+    return (value or "").strip().upper().replace(" ", "_")
+
+
 def _canonical_asset_type(asset_class_code: str, asset_subclass_code: str) -> str:
     class_code = (asset_class_code or "").strip().lower()
     subclass_code = (asset_subclass_code or "").strip().lower()
@@ -230,6 +243,19 @@ async def _insert_valuation_observation(
     )
 
 
+async def _ensure_document_metadata_exists(pool: asyncpg.Pool, paperless_doc_id: int) -> None:
+    await pool.execute(
+        """INSERT INTO document_metadata (paperless_doc_id, doc_purpose_type)
+           VALUES ($1, 'other')
+           ON CONFLICT (paperless_doc_id) DO NOTHING""",
+        paperless_doc_id,
+    )
+
+
+def _exactly_one(values: list[object]) -> bool:
+    return sum(v is not None for v in values) == 1
+
+
 # ─── MCP Server ──────────────────────────────────────────────────
 
 mcp = FastMCP(
@@ -249,7 +275,8 @@ async def list_people() -> str:
     """List all family members in the estate-planning graph."""
     pool = await get_pool()
     rows = await pool.fetch(
-        "SELECT id, legal_name, preferred_name, citizenship, residency_status "
+        "SELECT id, legal_name, preferred_name, citizenship, residency_status, "
+        "death_date, incapacity_status "
         "FROM people ORDER BY legal_name"
     )
     return json.dumps(_rows_to_list(rows), indent=2)
@@ -273,12 +300,31 @@ async def get_person(person_id: int) -> str:
         person["legal_name"],
     )
     docs = await pool.fetch(
-        "SELECT id, title, doc_type, expiry_date FROM documents WHERE person_id = $1",
+        """SELECT dm.paperless_doc_id,
+                  COALESCE(dm.source_snapshot_title, d.title) AS title,
+                  dm.doc_purpose_type,
+                  dm.status,
+                  dm.effective_date,
+                  dm.expiry_date,
+                  dm.last_reviewed
+           FROM document_metadata dm
+           LEFT JOIN documents d ON d.paperless_doc_id = dm.paperless_doc_id
+           WHERE dm.person_id = $1
+           ORDER BY dm.paperless_doc_id""",
+        person_id,
+    )
+    relationships = await pool.fetch(
+        """SELECT id, person_id, related_person_id, relationship_type,
+                  start_date, end_date, jurisdiction_code
+           FROM person_relationships
+           WHERE person_id = $1 OR related_person_id = $1
+           ORDER BY relationship_type, start_date NULLS FIRST""",
         person_id,
     )
     result = _row_to_dict(person)
     result["ownership"] = _rows_to_list(ownership)
     result["documents"] = _rows_to_list(docs)
+    result["relationships"] = _rows_to_list(relationships)
     return json.dumps(result, indent=2)
 
 
@@ -287,8 +333,12 @@ async def upsert_person(
     legal_name: str,
     preferred_name: str | None = None,
     date_of_birth: str | None = None,
+    death_date: str | None = None,
+    place_of_birth: str | None = None,
     citizenship: list[str] | None = None,
+    tax_residencies: list[str] | None = None,
     residency_status: str | None = None,
+    incapacity_status: str | None = None,
     tax_id: str | None = None,
     tax_id_type: str | None = None,
     email: str | None = None,
@@ -302,8 +352,12 @@ async def upsert_person(
         legal_name: Full legal name.
         preferred_name: Preferred/nickname.
         date_of_birth: Date of birth (YYYY-MM-DD).
+        death_date: Date of death (YYYY-MM-DD).
+        place_of_birth: Place of birth text.
         citizenship: List of country codes (e.g. ['US', 'IN']).
+        tax_residencies: Tax residency country codes (e.g. ['US', 'IN']).
         residency_status: citizen, resident, nri, oci.
+        incapacity_status: legal_capacity, limited_capacity, incapacitated.
         tax_id: SSN, PAN, etc.
         tax_id_type: SSN, PAN.
         email: Email address.
@@ -312,24 +366,31 @@ async def upsert_person(
         person_id: If provided, updates existing person.
     """
     pool = await get_pool()
-    dob = date.fromisoformat(date_of_birth) if date_of_birth else None
+    try:
+        dob = _parse_iso_date(date_of_birth, "date_of_birth")
+        dod = _parse_iso_date(death_date, "death_date")
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
 
     if person_id:
         row = await pool.fetchrow(
             """UPDATE people SET legal_name=$1, preferred_name=$2, date_of_birth=$3,
-               citizenship=$4, residency_status=$5, tax_id=$6, tax_id_type=$7,
-               email=$8, phone=$9, notes=$10, updated_at=now()
-               WHERE id=$11 RETURNING id, legal_name""",
-            legal_name, preferred_name, dob, citizenship, residency_status,
-            tax_id, tax_id_type, email, phone, notes, person_id,
+               death_date=$4, place_of_birth=$5, citizenship=$6, tax_residencies=$7,
+               residency_status=$8, incapacity_status=$9, tax_id=$10, tax_id_type=$11,
+               email=$12, phone=$13, notes=$14, updated_at=now()
+               WHERE id=$15 RETURNING id, legal_name""",
+            legal_name, preferred_name, dob, dod, place_of_birth, citizenship, tax_residencies,
+            residency_status, incapacity_status, tax_id, tax_id_type,
+            email, phone, notes, person_id,
         )
     else:
         row = await pool.fetchrow(
             """INSERT INTO people (legal_name, preferred_name, date_of_birth,
-               citizenship, residency_status, tax_id, tax_id_type, email, phone, notes)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id, legal_name""",
-            legal_name, preferred_name, dob, citizenship, residency_status,
-            tax_id, tax_id_type, email, phone, notes,
+               death_date, place_of_birth, citizenship, tax_residencies, residency_status,
+               incapacity_status, tax_id, tax_id_type, email, phone, notes)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id, legal_name""",
+            legal_name, preferred_name, dob, dod, place_of_birth, citizenship, tax_residencies,
+            residency_status, incapacity_status, tax_id, tax_id_type, email, phone, notes,
         )
     return json.dumps(_row_to_dict(row))
 
@@ -388,10 +449,12 @@ async def get_entity(entity_id: int) -> str:
     pool = await get_pool()
     entity = await pool.fetchrow(
         """SELECT e.*, et.code AS entity_type_code, et.name AS entity_type_name,
-                  j.code AS jurisdiction_code, j.name AS jurisdiction_name
+                  j.code AS jurisdiction_code, j.name AS jurisdiction_name,
+                  glj.code AS governing_law_jurisdiction_code
            FROM entities e
            JOIN entity_types et ON e.entity_type_id = et.id
            JOIN jurisdictions j ON e.jurisdiction_id = j.id
+           LEFT JOIN jurisdictions glj ON e.governing_law_jurisdiction_id = glj.id
            WHERE e.id = $1""",
         entity_id,
     )
@@ -403,17 +466,38 @@ async def get_entity(entity_id: int) -> str:
         entity["name"],
     )
     docs = await pool.fetch(
-        "SELECT id, title, doc_type, expiry_date FROM documents WHERE entity_id = $1",
+        """SELECT dm.paperless_doc_id,
+                  COALESCE(dm.source_snapshot_title, d.title) AS title,
+                  dm.doc_purpose_type,
+                  dm.status,
+                  dm.effective_date,
+                  dm.expiry_date,
+                  dm.last_reviewed
+           FROM document_metadata dm
+           LEFT JOIN documents d ON d.paperless_doc_id = dm.paperless_doc_id
+           WHERE dm.entity_id = $1
+           ORDER BY dm.paperless_doc_id""",
         entity_id,
     )
     dates = await pool.fetch(
         "SELECT * FROM critical_dates WHERE entity_id = $1 AND NOT completed ORDER BY due_date",
         entity_id,
     )
+    roles = await pool.fetch(
+        """SELECT er.*, p.legal_name AS holder_person_name, he.name AS holder_entity_name
+           FROM entity_roles er
+           LEFT JOIN people p ON p.id = er.holder_person_id
+           LEFT JOIN entities he ON he.id = er.holder_entity_id
+           WHERE er.entity_id = $1
+             AND (er.end_date IS NULL OR er.end_date >= CURRENT_DATE)
+           ORDER BY er.role_type, er.effective_date DESC""",
+        entity_id,
+    )
     result = _row_to_dict(entity)
     result["ownership"] = _rows_to_list(ownership)
     result["documents"] = _rows_to_list(docs)
     result["critical_dates"] = _rows_to_list(dates)
+    result["roles"] = _rows_to_list(roles)
     return json.dumps(result, indent=2)
 
 
@@ -422,6 +506,7 @@ async def upsert_entity(
     name: str,
     entity_type_code: str,
     jurisdiction_code: str,
+    governing_law_jurisdiction_code: str | None = None,
     status: str = "active",
     formation_date: str | None = None,
     tax_id: str | None = None,
@@ -439,6 +524,7 @@ async def upsert_entity(
         name: Entity name.
         entity_type_code: Entity type code (e.g. LLC, REVOCABLE_TRUST, HUF).
         jurisdiction_code: Jurisdiction code (e.g. US-DE, IN-KA).
+        governing_law_jurisdiction_code: Governing-law jurisdiction code (e.g. US-DE, IN-KA).
         status: active, dissolved, or pending.
         formation_date: Formation date (YYYY-MM-DD).
         tax_id: EIN, PAN, TAN.
@@ -459,25 +545,36 @@ async def upsert_entity(
     jid = await pool.fetchval("SELECT id FROM jurisdictions WHERE code = $1", jurisdiction_code)
     if not jid:
         return json.dumps({"error": f"Unknown jurisdiction_code: {jurisdiction_code}"})
+    governing_law_jid = None
+    if governing_law_jurisdiction_code:
+        governing_law_jid = await pool.fetchval(
+            "SELECT id FROM jurisdictions WHERE code = $1",
+            governing_law_jurisdiction_code,
+        )
+        if not governing_law_jid:
+            return json.dumps(
+                {"error": f"Unknown governing_law_jurisdiction_code: {governing_law_jurisdiction_code}"}
+            )
 
     if entity_id:
         row = await pool.fetchrow(
             """UPDATE entities SET name=$1, entity_type_id=$2, jurisdiction_id=$3,
-               status=$4, formation_date=$5, tax_id=$6, tax_id_type=$7,
-               grantor_id=$8, trustee_id=$9, karta_id=$10, registered_agent=$11,
-               notes=$12, updated_at=now()
-               WHERE id=$13 RETURNING id, name""",
-            name, et, jid, status, fd, tax_id, tax_id_type,
+               governing_law_jurisdiction_id=COALESCE($4, governing_law_jurisdiction_id),
+               status=$5, formation_date=$6, tax_id=$7, tax_id_type=$8,
+               grantor_id=$9, trustee_id=$10, karta_id=$11, registered_agent=$12,
+               notes=$13, updated_at=now()
+               WHERE id=$14 RETURNING id, name""",
+            name, et, jid, governing_law_jid, status, fd, tax_id, tax_id_type,
             grantor_id, trustee_id, karta_id, registered_agent, notes, entity_id,
         )
     else:
         row = await pool.fetchrow(
             """INSERT INTO entities (name, entity_type_id, jurisdiction_id, status,
-               formation_date, tax_id, tax_id_type, grantor_id, trustee_id,
+               governing_law_jurisdiction_id, formation_date, tax_id, tax_id_type, grantor_id, trustee_id,
                karta_id, registered_agent, notes)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
                RETURNING id, name""",
-            name, et, jid, status, fd, tax_id, tax_id_type,
+            name, et, jid, status, governing_law_jid, fd, tax_id, tax_id_type,
             grantor_id, trustee_id, karta_id, registered_agent, notes,
         )
     return json.dumps(_row_to_dict(row))
@@ -906,7 +1003,42 @@ async def set_ownership(
             owner_person_id, owner_entity_id, owned_entity_id, owned_asset_id,
             percentage, units, ed, notes,
         )
-    return json.dumps({"id": row["id"], "status": "ok"})
+    interest_row = await pool.fetchrow(
+        """INSERT INTO beneficial_interests (
+               ownership_path_id,
+               owner_person_id, owner_entity_id,
+               subject_entity_id, subject_asset_id,
+               interest_type, direct_or_indirect, beneficial_flag,
+               share_exact, start_date, assertion_source, notes
+           )
+           VALUES ($1,$2,$3,$4,$5,'shareholding','unknown',FALSE,$6,$7,'set_ownership', $8)
+           ON CONFLICT (ownership_path_id) WHERE ownership_path_id IS NOT NULL
+           DO UPDATE SET
+               owner_person_id = EXCLUDED.owner_person_id,
+               owner_entity_id = EXCLUDED.owner_entity_id,
+               subject_entity_id = EXCLUDED.subject_entity_id,
+               subject_asset_id = EXCLUDED.subject_asset_id,
+               share_exact = EXCLUDED.share_exact,
+               start_date = EXCLUDED.start_date,
+               notes = EXCLUDED.notes,
+               updated_at = now()
+           RETURNING id""",
+        row["id"],
+        owner_person_id,
+        owner_entity_id,
+        owned_entity_id,
+        owned_asset_id,
+        percentage,
+        ed,
+        notes,
+    )
+    return json.dumps(
+        {
+            "id": row["id"],
+            "status": "ok",
+            "beneficial_interest_id": interest_row["id"] if interest_row else None,
+        }
+    )
 
 
 # ─── Cross-Cutting Tools ─────────────────────────────────────────
@@ -969,8 +1101,20 @@ async def get_upcoming_dates(days: int = 30) -> str:
     """
     pool = await get_pool()
     rows = await pool.fetch(
-        """SELECT cd.*, e.name AS entity_name, a.name AS asset_name,
-                  p.legal_name AS person_name, j.code AS jurisdiction
+        """SELECT cd.id,
+                  cd.title,
+                  cd.date_type,
+                  cd.due_date,
+                  cd.entity_id,
+                  cd.asset_id,
+                  cd.person_id,
+                  cd.jurisdiction_id,
+                  cd.notes,
+                  'critical_date'::text AS source_type,
+                  e.name AS entity_name,
+                  a.name AS asset_name,
+                  p.legal_name AS person_name,
+                  j.code AS jurisdiction
            FROM critical_dates cd
            LEFT JOIN entities e ON cd.entity_id = e.id
            LEFT JOIN assets a ON cd.asset_id = a.id
@@ -978,7 +1122,31 @@ async def get_upcoming_dates(days: int = 30) -> str:
            LEFT JOIN jurisdictions j ON cd.jurisdiction_id = j.id
            WHERE NOT cd.completed
              AND cd.due_date <= CURRENT_DATE + $1 * INTERVAL '1 day'
-           ORDER BY cd.due_date""",
+           UNION ALL
+           SELECT NULL::integer AS id,
+                  COALESCE(dm.source_snapshot_title, 'Document review') AS title,
+                  'document_review'::text AS date_type,
+                  drp.next_review_date AS due_date,
+                  dm.entity_id,
+                  dm.asset_id,
+                  dm.person_id,
+                  dm.jurisdiction_id,
+                  drp.notes,
+                  'document_review_policy'::text AS source_type,
+                  e2.name AS entity_name,
+                  a2.name AS asset_name,
+                  p2.legal_name AS person_name,
+                  j2.code AS jurisdiction
+           FROM document_review_policies drp
+           JOIN document_metadata dm ON dm.paperless_doc_id = drp.paperless_doc_id
+           LEFT JOIN entities e2 ON dm.entity_id = e2.id
+           LEFT JOIN assets a2 ON dm.asset_id = a2.id
+           LEFT JOIN people p2 ON dm.person_id = p2.id
+           LEFT JOIN jurisdictions j2 ON dm.jurisdiction_id = j2.id
+           WHERE drp.policy_status = 'active'
+             AND drp.next_review_date IS NOT NULL
+             AND drp.next_review_date <= CURRENT_DATE + $1 * INTERVAL '1 day'
+           ORDER BY due_date, title""",
         days,
     )
     return json.dumps(_rows_to_list(rows), indent=2)
@@ -986,8 +1154,8 @@ async def get_upcoming_dates(days: int = 30) -> str:
 
 @mcp.tool()
 async def link_document(
-    title: str,
-    doc_type: str,
+    title: str | None = None,
+    doc_type: str | None = None,
     paperless_doc_id: int | None = None,
     vaultwarden_item_id: str | None = None,
     entity_id: int | None = None,
@@ -998,11 +1166,11 @@ async def link_document(
     expiry_date: str | None = None,
     notes: str | None = None,
 ) -> str:
-    """Link a document (from Paperless-ngx or Vaultwarden) to an entity, asset, or person.
+    """Link document metadata to estate records using Paperless as canonical identity.
 
     Args:
-        title: Document title.
-        doc_type: trust_agreement, llc_agreement, deed, will, poa, k1, tax_return, registration, certificate, other.
+        title: Optional non-canonical title snapshot from source.
+        doc_type: Estate purpose type (trust_agreement, llc_agreement, deed, will, poa, etc).
         paperless_doc_id: Paperless-ngx document ID.
         vaultwarden_item_id: Vaultwarden item ID.
         entity_id: Link to entity.
@@ -1013,21 +1181,925 @@ async def link_document(
         expiry_date: Document expiry date (YYYY-MM-DD).
         notes: Free-text notes.
     """
+    if paperless_doc_id is None:
+        return json.dumps({"error": "paperless_doc_id is required"})
+
     pool = await get_pool()
     jid = None
     if jurisdiction_code:
         jid = await pool.fetchval("SELECT id FROM jurisdictions WHERE code = $1", jurisdiction_code)
+        if not jid:
+            return json.dumps({"error": f"Unknown jurisdiction_code: {jurisdiction_code}"})
 
-    ed = date.fromisoformat(effective_date) if effective_date else None
-    xd = date.fromisoformat(expiry_date) if expiry_date else None
+    try:
+        ed = _parse_iso_date(effective_date, "effective_date")
+        xd = _parse_iso_date(expiry_date, "expiry_date")
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
+    source_title = (title or "").strip() or None
+    purpose_type = (doc_type or "other").strip().lower()
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            existing = await conn.fetchrow(
+                "SELECT id FROM documents WHERE paperless_doc_id = $1",
+                paperless_doc_id,
+            )
+            if existing:
+                legacy = await conn.fetchrow(
+                    """UPDATE documents
+                       SET title = COALESCE($1, title),
+                           doc_type = COALESCE($2, doc_type),
+                           vaultwarden_item_id = COALESCE($3, vaultwarden_item_id),
+                           entity_id = COALESCE($4, entity_id),
+                           asset_id = COALESCE($5, asset_id),
+                           person_id = COALESCE($6, person_id),
+                           jurisdiction_id = COALESCE($7, jurisdiction_id),
+                           effective_date = COALESCE($8, effective_date),
+                           expiry_date = COALESCE($9, expiry_date),
+                           notes = COALESCE($10, notes),
+                           updated_at = now()
+                       WHERE id = $11
+                       RETURNING id, title, paperless_doc_id""",
+                    source_title,
+                    purpose_type,
+                    vaultwarden_item_id,
+                    entity_id,
+                    asset_id,
+                    person_id,
+                    jid,
+                    ed,
+                    xd,
+                    notes,
+                    existing["id"],
+                )
+            else:
+                legacy = await conn.fetchrow(
+                    """INSERT INTO documents (
+                           title, doc_type, paperless_doc_id, vaultwarden_item_id,
+                           entity_id, asset_id, person_id, jurisdiction_id,
+                           effective_date, expiry_date, notes
+                       ) VALUES (
+                           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11
+                       )
+                       RETURNING id, title, paperless_doc_id""",
+                    source_title or f"Paperless {paperless_doc_id}",
+                    purpose_type,
+                    paperless_doc_id,
+                    vaultwarden_item_id,
+                    entity_id,
+                    asset_id,
+                    person_id,
+                    jid,
+                    ed,
+                    xd,
+                    notes,
+                )
+
+            metadata = await conn.fetchrow(
+                """INSERT INTO document_metadata (
+                       paperless_doc_id, entity_id, asset_id, person_id, jurisdiction_id,
+                       doc_purpose_type, effective_date, expiry_date, source_snapshot_title,
+                       source_snapshot_doc_type, notes, status
+                   ) VALUES (
+                       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'active'
+                   )
+                   ON CONFLICT (paperless_doc_id) DO UPDATE SET
+                       entity_id = COALESCE(EXCLUDED.entity_id, document_metadata.entity_id),
+                       asset_id = COALESCE(EXCLUDED.asset_id, document_metadata.asset_id),
+                       person_id = COALESCE(EXCLUDED.person_id, document_metadata.person_id),
+                       jurisdiction_id = COALESCE(EXCLUDED.jurisdiction_id, document_metadata.jurisdiction_id),
+                       doc_purpose_type = COALESCE(EXCLUDED.doc_purpose_type, document_metadata.doc_purpose_type),
+                       effective_date = COALESCE(EXCLUDED.effective_date, document_metadata.effective_date),
+                       expiry_date = COALESCE(EXCLUDED.expiry_date, document_metadata.expiry_date),
+                       source_snapshot_title = COALESCE(EXCLUDED.source_snapshot_title, document_metadata.source_snapshot_title),
+                       source_snapshot_doc_type = COALESCE(EXCLUDED.source_snapshot_doc_type, document_metadata.source_snapshot_doc_type),
+                       notes = COALESCE(EXCLUDED.notes, document_metadata.notes),
+                       updated_at = now()
+                   RETURNING paperless_doc_id, doc_purpose_type, status""",
+                paperless_doc_id,
+                entity_id,
+                asset_id,
+                person_id,
+                jid,
+                purpose_type,
+                ed,
+                xd,
+                source_title,
+                purpose_type,
+                notes,
+            )
+
+    payload = _row_to_dict(legacy)
+    payload["paperless_doc_id"] = paperless_doc_id
+    payload["doc_metadata"] = _row_to_dict(metadata)
+    payload["status"] = "ok"
+    return json.dumps(payload)
+
+
+@mcp.tool()
+async def upsert_document_metadata(
+    paperless_doc_id: int,
+    doc_purpose_type: str = "other",
+    entity_id: int | None = None,
+    asset_id: int | None = None,
+    person_id: int | None = None,
+    jurisdiction_code: str | None = None,
+    effective_date: str | None = None,
+    expiry_date: str | None = None,
+    last_reviewed: str | None = None,
+    status: str = "active",
+    source_snapshot_title: str | None = None,
+    source_snapshot_doc_type: str | None = None,
+    notes: str | None = None,
+) -> str:
+    """Create or update estate-only metadata for a Paperless document."""
+    pool = await get_pool()
+    jid = None
+    if jurisdiction_code:
+        jid = await pool.fetchval("SELECT id FROM jurisdictions WHERE code = $1", jurisdiction_code)
+        if not jid:
+            return json.dumps({"error": f"Unknown jurisdiction_code: {jurisdiction_code}"})
+    try:
+        ed = _parse_iso_date(effective_date, "effective_date")
+        xd = _parse_iso_date(expiry_date, "expiry_date")
+        lr = _parse_iso_date(last_reviewed, "last_reviewed")
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
 
     row = await pool.fetchrow(
-        """INSERT INTO documents (title, doc_type, paperless_doc_id, vaultwarden_item_id,
-           entity_id, asset_id, person_id, jurisdiction_id, effective_date, expiry_date, notes)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-           RETURNING id, title""",
-        title, doc_type, paperless_doc_id, vaultwarden_item_id,
-        entity_id, asset_id, person_id, jid, ed, xd, notes,
+        """INSERT INTO document_metadata (
+               paperless_doc_id, entity_id, asset_id, person_id, jurisdiction_id,
+               doc_purpose_type, effective_date, expiry_date, last_reviewed, status,
+               source_snapshot_title, source_snapshot_doc_type, notes
+           )
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+           ON CONFLICT (paperless_doc_id) DO UPDATE SET
+               entity_id = COALESCE(EXCLUDED.entity_id, document_metadata.entity_id),
+               asset_id = COALESCE(EXCLUDED.asset_id, document_metadata.asset_id),
+               person_id = COALESCE(EXCLUDED.person_id, document_metadata.person_id),
+               jurisdiction_id = COALESCE(EXCLUDED.jurisdiction_id, document_metadata.jurisdiction_id),
+               doc_purpose_type = EXCLUDED.doc_purpose_type,
+               effective_date = COALESCE(EXCLUDED.effective_date, document_metadata.effective_date),
+               expiry_date = COALESCE(EXCLUDED.expiry_date, document_metadata.expiry_date),
+               last_reviewed = COALESCE(EXCLUDED.last_reviewed, document_metadata.last_reviewed),
+               status = EXCLUDED.status,
+               source_snapshot_title = COALESCE(EXCLUDED.source_snapshot_title, document_metadata.source_snapshot_title),
+               source_snapshot_doc_type = COALESCE(EXCLUDED.source_snapshot_doc_type, document_metadata.source_snapshot_doc_type),
+               notes = COALESCE(EXCLUDED.notes, document_metadata.notes),
+               updated_at = now()
+           RETURNING *""",
+        paperless_doc_id,
+        entity_id,
+        asset_id,
+        person_id,
+        jid,
+        doc_purpose_type.strip().lower(),
+        ed,
+        xd,
+        lr,
+        status.strip().lower(),
+        (source_snapshot_title or "").strip() or None,
+        (source_snapshot_doc_type or "").strip() or None,
+        notes,
+    )
+    return json.dumps(_row_to_dict(row))
+
+
+@mcp.tool()
+async def set_document_version_link(
+    paperless_doc_id: int,
+    supersedes_paperless_doc_id: int,
+    version_reason: str | None = None,
+    asserted_by: str | None = None,
+    notes: str | None = None,
+) -> str:
+    """Record that one Paperless document supersedes another."""
+    if paperless_doc_id == supersedes_paperless_doc_id:
+        return json.dumps({"error": "paperless_doc_id and supersedes_paperless_doc_id must differ"})
+
+    pool = await get_pool()
+    await _ensure_document_metadata_exists(pool, paperless_doc_id)
+    await _ensure_document_metadata_exists(pool, supersedes_paperless_doc_id)
+
+    cycle = await pool.fetchval(
+        """WITH RECURSIVE chain AS (
+               SELECT supersedes_paperless_doc_id AS node
+               FROM document_version_links
+               WHERE paperless_doc_id = $1
+               UNION ALL
+               SELECT dvl.supersedes_paperless_doc_id
+               FROM document_version_links dvl
+               JOIN chain c ON dvl.paperless_doc_id = c.node
+           )
+           SELECT 1 FROM chain WHERE node = $2 LIMIT 1""",
+        supersedes_paperless_doc_id,
+        paperless_doc_id,
+    )
+    if cycle:
+        return json.dumps(
+            {
+                "error": "version link would create a cycle",
+                "paperless_doc_id": paperless_doc_id,
+                "supersedes_paperless_doc_id": supersedes_paperless_doc_id,
+            }
+        )
+
+    row = await pool.fetchrow(
+        """INSERT INTO document_version_links (
+               paperless_doc_id, supersedes_paperless_doc_id, version_reason, asserted_by, notes
+           )
+           VALUES ($1,$2,$3,$4,$5)
+           ON CONFLICT (paperless_doc_id, supersedes_paperless_doc_id) DO UPDATE SET
+               version_reason = COALESCE(EXCLUDED.version_reason, document_version_links.version_reason),
+               asserted_by = COALESCE(EXCLUDED.asserted_by, document_version_links.asserted_by),
+               notes = COALESCE(EXCLUDED.notes, document_version_links.notes),
+               asserted_at = now()
+           RETURNING *""",
+        paperless_doc_id,
+        supersedes_paperless_doc_id,
+        version_reason,
+        asserted_by,
+        notes,
+    )
+    return json.dumps(_row_to_dict(row))
+
+
+@mcp.tool()
+async def add_document_participant(
+    paperless_doc_id: int,
+    person_id: int,
+    role: str,
+    signed_at: str | None = None,
+    notes: str | None = None,
+) -> str:
+    """Add a person-role participant for a Paperless document (signatory/witness/notary/etc.)."""
+    pool = await get_pool()
+    await _ensure_document_metadata_exists(pool, paperless_doc_id)
+    signed_dt = None
+    if signed_at:
+        try:
+            signed_dt = datetime.fromisoformat(signed_at)
+        except ValueError:
+            return json.dumps({"error": f"Invalid signed_at: {signed_at}. Use ISO datetime format."})
+
+    row = await pool.fetchrow(
+        """INSERT INTO document_participants (
+               paperless_doc_id, person_id, role, signed_at, notes
+           ) VALUES ($1,$2,$3,$4,$5)
+           RETURNING *""",
+        paperless_doc_id,
+        person_id,
+        role.strip().lower(),
+        signed_dt,
+        notes,
+    )
+    return json.dumps(_row_to_dict(row))
+
+
+@mcp.tool()
+async def add_document_assertion(
+    paperless_doc_id: int,
+    assertion_type: str,
+    asserted_value_json: dict | str | None = None,
+    source_system: str = "estate-planning",
+    source_record_id: str | None = None,
+    confidence: float | None = None,
+    asserted_at: str | None = None,
+    notes: str | None = None,
+) -> str:
+    """Record a source-backed assertion on a Paperless document."""
+    pool = await get_pool()
+    await _ensure_document_metadata_exists(pool, paperless_doc_id)
+
+    assertion_dt = None
+    if asserted_at:
+        try:
+            assertion_dt = datetime.fromisoformat(asserted_at)
+        except ValueError:
+            return json.dumps({"error": f"Invalid asserted_at: {asserted_at}. Use ISO datetime format."})
+
+    row = await pool.fetchrow(
+        """INSERT INTO document_assertions (
+               paperless_doc_id, assertion_type, asserted_value_json, source_system,
+               source_record_id, confidence, asserted_at, notes
+           ) VALUES (
+               $1,$2,$3,$4,$5,$6,COALESCE($7, now()),$8
+           )
+           RETURNING *""",
+        paperless_doc_id,
+        assertion_type.strip().lower(),
+        json.dumps(_coerce_json_input(asserted_value_json)),
+        source_system,
+        source_record_id,
+        confidence,
+        assertion_dt,
+        notes,
+    )
+    return json.dumps(_row_to_dict(row))
+
+
+@mcp.tool()
+async def upsert_document_review_policy(
+    paperless_doc_id: int,
+    review_cadence: str = "annual",
+    next_review_date: str | None = None,
+    renewal_window_days: int = 30,
+    owner_person_id: int | None = None,
+    policy_status: str = "active",
+    notes: str | None = None,
+) -> str:
+    """Set review cadence and renewal policy for a Paperless document."""
+    pool = await get_pool()
+    await _ensure_document_metadata_exists(pool, paperless_doc_id)
+
+    try:
+        nrd = _parse_iso_date(next_review_date, "next_review_date")
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
+    row = await pool.fetchrow(
+        """INSERT INTO document_review_policies (
+               paperless_doc_id, review_cadence, next_review_date, renewal_window_days,
+               owner_person_id, policy_status, notes
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+           ON CONFLICT (paperless_doc_id) DO UPDATE SET
+               review_cadence = EXCLUDED.review_cadence,
+               next_review_date = EXCLUDED.next_review_date,
+               renewal_window_days = EXCLUDED.renewal_window_days,
+               owner_person_id = EXCLUDED.owner_person_id,
+               policy_status = EXCLUDED.policy_status,
+               notes = COALESCE(EXCLUDED.notes, document_review_policies.notes),
+               updated_at = now()
+           RETURNING *""",
+        paperless_doc_id,
+        review_cadence.strip().lower(),
+        nrd,
+        renewal_window_days,
+        owner_person_id,
+        policy_status.strip().lower(),
+        notes,
+    )
+    return json.dumps(_row_to_dict(row))
+
+
+@mcp.tool()
+async def set_person_relationship(
+    person_id: int,
+    related_person_id: int,
+    relationship_type: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    jurisdiction_code: str | None = None,
+    source_paperless_doc_id: int | None = None,
+    notes: str | None = None,
+) -> str:
+    """Create a first-class family relationship edge used for succession workflows."""
+    if person_id == related_person_id:
+        return json.dumps({"error": "person_id and related_person_id must differ"})
+
+    pool = await get_pool()
+    try:
+        sd = _parse_iso_date(start_date, "start_date")
+        ed = _parse_iso_date(end_date, "end_date")
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
+    if sd and ed and ed < sd:
+        return json.dumps({"error": "end_date cannot be before start_date"})
+
+    row = await pool.fetchrow(
+        """INSERT INTO person_relationships (
+               person_id, related_person_id, relationship_type, start_date, end_date,
+               jurisdiction_code, source_paperless_doc_id, notes
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+           RETURNING *""",
+        person_id,
+        related_person_id,
+        relationship_type.strip().lower(),
+        sd,
+        ed,
+        jurisdiction_code,
+        source_paperless_doc_id,
+        notes,
+    )
+    return json.dumps(_row_to_dict(row))
+
+
+@mcp.tool()
+async def set_entity_role(
+    entity_id: int,
+    role_type: str,
+    holder_person_id: int | None = None,
+    holder_entity_id: int | None = None,
+    authority_scope: dict | str | None = None,
+    effective_date: str | None = None,
+    end_date: str | None = None,
+    appointment_paperless_doc_id: int | None = None,
+    removal_paperless_doc_id: int | None = None,
+    notes: str | None = None,
+) -> str:
+    """Assign a fiduciary/governance role to a person or entity."""
+    if not _exactly_one([holder_person_id, holder_entity_id]):
+        return json.dumps({"error": "Provide exactly one of holder_person_id or holder_entity_id"})
+
+    try:
+        ed = _parse_iso_date(effective_date, "effective_date") or date.today()
+        xd = _parse_iso_date(end_date, "end_date")
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        """INSERT INTO entity_roles (
+               entity_id, holder_person_id, holder_entity_id, role_type, authority_scope,
+               effective_date, end_date, appointment_paperless_doc_id, removal_paperless_doc_id, notes
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+           RETURNING *""",
+        entity_id,
+        holder_person_id,
+        holder_entity_id,
+        role_type.strip().lower(),
+        json.dumps(_coerce_json_input(authority_scope)),
+        ed,
+        xd,
+        appointment_paperless_doc_id,
+        removal_paperless_doc_id,
+        notes,
+    )
+    return json.dumps(_row_to_dict(row))
+
+
+@mcp.tool()
+async def upsert_identifier(
+    identifier_type: str,
+    identifier_value: str,
+    person_id: int | None = None,
+    entity_id: int | None = None,
+    asset_id: int | None = None,
+    jurisdiction_code: str | None = None,
+    issuing_authority: str | None = None,
+    issue_date: str | None = None,
+    expiry_date: str | None = None,
+    status: str = "active",
+    verification_paperless_doc_id: int | None = None,
+    notes: str | None = None,
+) -> str:
+    """Create or update a typed statutory identifier for person/entity/asset."""
+    if not _exactly_one([person_id, entity_id, asset_id]):
+        return json.dumps({"error": "Provide exactly one of person_id, entity_id, or asset_id"})
+
+    try:
+        issue_dt = _parse_iso_date(issue_date, "issue_date")
+        expiry_dt = _parse_iso_date(expiry_date, "expiry_date")
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
+    normalized_type = _normalize_identifier_type(identifier_type)
+    normalized_value = (identifier_value or "").strip()
+    if not normalized_value:
+        return json.dumps({"error": "identifier_value is required"})
+
+    owner_column = "person_id"
+    owner_id = person_id
+    table_name = "person_identifiers"
+    if entity_id is not None:
+        owner_column = "entity_id"
+        owner_id = entity_id
+        table_name = "entity_identifiers"
+    elif asset_id is not None:
+        owner_column = "asset_id"
+        owner_id = asset_id
+        table_name = "asset_identifiers"
+
+    pool = await get_pool()
+    query = f"""
+        INSERT INTO {table_name} (
+            {owner_column}, identifier_type, identifier_value, jurisdiction_code,
+            issuing_authority, issue_date, expiry_date, status,
+            verification_paperless_doc_id, notes
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        ON CONFLICT ({owner_column}, identifier_type, identifier_value) DO UPDATE SET
+            jurisdiction_code = COALESCE(EXCLUDED.jurisdiction_code, {table_name}.jurisdiction_code),
+            issuing_authority = COALESCE(EXCLUDED.issuing_authority, {table_name}.issuing_authority),
+            issue_date = COALESCE(EXCLUDED.issue_date, {table_name}.issue_date),
+            expiry_date = COALESCE(EXCLUDED.expiry_date, {table_name}.expiry_date),
+            status = EXCLUDED.status,
+            verification_paperless_doc_id = COALESCE(EXCLUDED.verification_paperless_doc_id, {table_name}.verification_paperless_doc_id),
+            notes = COALESCE(EXCLUDED.notes, {table_name}.notes),
+            updated_at = now()
+        RETURNING *
+    """
+    row = await pool.fetchrow(
+        query,
+        owner_id,
+        normalized_type,
+        normalized_value,
+        jurisdiction_code,
+        issuing_authority,
+        issue_dt,
+        expiry_dt,
+        status.strip().lower(),
+        verification_paperless_doc_id,
+        notes,
+    )
+    return json.dumps(_row_to_dict(row))
+
+
+@mcp.tool()
+async def set_beneficial_interest(
+    interest_type: str,
+    owner_person_id: int | None = None,
+    owner_entity_id: int | None = None,
+    subject_entity_id: int | None = None,
+    subject_asset_id: int | None = None,
+    direct_or_indirect: str = "unknown",
+    beneficial_flag: bool = False,
+    share_exact: float | None = None,
+    share_min: float | None = None,
+    share_max: float | None = None,
+    assertion_source: str | None = None,
+    ownership_path_id: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    notes: str | None = None,
+) -> str:
+    """Set rich ownership semantics (economic/control rights) for an ownership relationship."""
+    if not _exactly_one([owner_person_id, owner_entity_id]):
+        return json.dumps({"error": "Provide exactly one of owner_person_id or owner_entity_id"})
+    if not _exactly_one([subject_entity_id, subject_asset_id]):
+        return json.dumps({"error": "Provide exactly one of subject_entity_id or subject_asset_id"})
+
+    doi = (direct_or_indirect or "").strip().lower()
+    if doi not in {"direct", "indirect", "unknown"}:
+        return json.dumps({"error": "direct_or_indirect must be one of: direct, indirect, unknown"})
+
+    try:
+        sd = _parse_iso_date(start_date, "start_date") or date.today()
+        ed = _parse_iso_date(end_date, "end_date")
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        """INSERT INTO beneficial_interests (
+               ownership_path_id, owner_person_id, owner_entity_id, subject_entity_id, subject_asset_id,
+               interest_type, direct_or_indirect, beneficial_flag,
+               share_exact, share_min, share_max, assertion_source, start_date, end_date, notes
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+           ON CONFLICT (ownership_path_id) WHERE ownership_path_id IS NOT NULL
+           DO UPDATE SET
+               owner_person_id = EXCLUDED.owner_person_id,
+               owner_entity_id = EXCLUDED.owner_entity_id,
+               subject_entity_id = EXCLUDED.subject_entity_id,
+               subject_asset_id = EXCLUDED.subject_asset_id,
+               interest_type = EXCLUDED.interest_type,
+               direct_or_indirect = EXCLUDED.direct_or_indirect,
+               beneficial_flag = EXCLUDED.beneficial_flag,
+               share_exact = EXCLUDED.share_exact,
+               share_min = EXCLUDED.share_min,
+               share_max = EXCLUDED.share_max,
+               assertion_source = COALESCE(EXCLUDED.assertion_source, beneficial_interests.assertion_source),
+               start_date = EXCLUDED.start_date,
+               end_date = EXCLUDED.end_date,
+               notes = COALESCE(EXCLUDED.notes, beneficial_interests.notes),
+               updated_at = now()
+           RETURNING *""",
+        ownership_path_id,
+        owner_person_id,
+        owner_entity_id,
+        subject_entity_id,
+        subject_asset_id,
+        (interest_type or "").strip().lower(),
+        doi,
+        beneficial_flag,
+        share_exact,
+        share_min,
+        share_max,
+        assertion_source,
+        sd,
+        ed,
+        notes,
+    )
+    return json.dumps(_row_to_dict(row))
+
+
+@mcp.tool()
+async def upsert_succession_plan(
+    name: str,
+    governing_law_jurisdiction_code: str | None = None,
+    grantor_person_id: int | None = None,
+    sponsor_entity_id: int | None = None,
+    primary_instrument_paperless_doc_id: int | None = None,
+    status: str = "active",
+    effective_date: str | None = None,
+    termination_date: str | None = None,
+    notes: str | None = None,
+    succession_plan_id: int | None = None,
+) -> str:
+    """Create or update a succession plan."""
+    pool = await get_pool()
+    gl_jid = None
+    if governing_law_jurisdiction_code:
+        gl_jid = await pool.fetchval(
+            "SELECT id FROM jurisdictions WHERE code = $1",
+            governing_law_jurisdiction_code,
+        )
+        if not gl_jid:
+            return json.dumps({"error": f"Unknown governing_law_jurisdiction_code: {governing_law_jurisdiction_code}"})
+
+    try:
+        eff = _parse_iso_date(effective_date, "effective_date")
+        term = _parse_iso_date(termination_date, "termination_date")
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
+    if succession_plan_id:
+        row = await pool.fetchrow(
+            """UPDATE succession_plans
+               SET name=$1,
+                   governing_law_jurisdiction_id=COALESCE($2, governing_law_jurisdiction_id),
+                   grantor_person_id=COALESCE($3, grantor_person_id),
+                   sponsor_entity_id=COALESCE($4, sponsor_entity_id),
+                   primary_instrument_paperless_doc_id=COALESCE($5, primary_instrument_paperless_doc_id),
+                   status=$6,
+                   effective_date=COALESCE($7, effective_date),
+                   termination_date=COALESCE($8, termination_date),
+                   notes=COALESCE($9, notes),
+                   updated_at=now()
+               WHERE id=$10
+               RETURNING *""",
+            name,
+            gl_jid,
+            grantor_person_id,
+            sponsor_entity_id,
+            primary_instrument_paperless_doc_id,
+            status.strip().lower(),
+            eff,
+            term,
+            notes,
+            succession_plan_id,
+        )
+    else:
+        row = await pool.fetchrow(
+            """INSERT INTO succession_plans (
+                   name, governing_law_jurisdiction_id, grantor_person_id, sponsor_entity_id,
+                   primary_instrument_paperless_doc_id, status, effective_date, termination_date, notes
+               ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+               RETURNING *""",
+            name,
+            gl_jid,
+            grantor_person_id,
+            sponsor_entity_id,
+            primary_instrument_paperless_doc_id,
+            status.strip().lower(),
+            eff,
+            term,
+            notes,
+        )
+    return json.dumps(_row_to_dict(row))
+
+
+@mcp.tool()
+async def set_beneficiary_designation(
+    succession_plan_id: int,
+    beneficiary_person_id: int | None = None,
+    beneficiary_entity_id: int | None = None,
+    beneficiary_class: str = "primary",
+    share_percentage: float | None = None,
+    per_stirpes: bool = False,
+    per_capita: bool = False,
+    anti_lapse: bool = False,
+    condition_json: dict | str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    source_paperless_doc_id: int | None = None,
+    notes: str | None = None,
+    designation_id: int | None = None,
+) -> str:
+    """Create or update a beneficiary designation for a succession plan."""
+    if not _exactly_one([beneficiary_person_id, beneficiary_entity_id]):
+        return json.dumps({"error": "Provide exactly one of beneficiary_person_id or beneficiary_entity_id"})
+
+    try:
+        sd = _parse_iso_date(start_date, "start_date")
+        ed = _parse_iso_date(end_date, "end_date")
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
+    pool = await get_pool()
+    if designation_id:
+        row = await pool.fetchrow(
+            """UPDATE beneficiary_designations
+               SET succession_plan_id=$1,
+                   beneficiary_person_id=$2,
+                   beneficiary_entity_id=$3,
+                   beneficiary_class=$4,
+                   share_percentage=$5,
+                   per_stirpes=$6,
+                   per_capita=$7,
+                   anti_lapse=$8,
+                   condition_json=$9,
+                   start_date=$10,
+                   end_date=$11,
+                   source_paperless_doc_id=$12,
+                   notes=$13,
+                   updated_at=now()
+               WHERE id=$14
+               RETURNING *""",
+            succession_plan_id,
+            beneficiary_person_id,
+            beneficiary_entity_id,
+            beneficiary_class.strip().lower(),
+            share_percentage,
+            per_stirpes,
+            per_capita,
+            anti_lapse,
+            json.dumps(_coerce_json_input(condition_json)),
+            sd,
+            ed,
+            source_paperless_doc_id,
+            notes,
+            designation_id,
+        )
+    else:
+        row = await pool.fetchrow(
+            """INSERT INTO beneficiary_designations (
+                   succession_plan_id, beneficiary_person_id, beneficiary_entity_id,
+                   beneficiary_class, share_percentage, per_stirpes, per_capita, anti_lapse,
+                   condition_json, start_date, end_date, source_paperless_doc_id, notes
+               ) VALUES (
+                   $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13
+               )
+               RETURNING *""",
+            succession_plan_id,
+            beneficiary_person_id,
+            beneficiary_entity_id,
+            beneficiary_class.strip().lower(),
+            share_percentage,
+            per_stirpes,
+            per_capita,
+            anti_lapse,
+            json.dumps(_coerce_json_input(condition_json)),
+            sd,
+            ed,
+            source_paperless_doc_id,
+            notes,
+        )
+    return json.dumps(_row_to_dict(row))
+
+
+@mcp.tool()
+async def upsert_compliance_obligation(
+    title: str,
+    obligation_type: str,
+    recurrence: str = "annual",
+    jurisdiction_code: str | None = None,
+    entity_type_code: str | None = None,
+    due_rule: str | None = None,
+    grace_days: int = 0,
+    penalty_notes: str | None = None,
+    default_owner_person_id: int | None = None,
+    active: bool = True,
+    obligation_id: int | None = None,
+) -> str:
+    """Create or update a compliance obligation definition."""
+    pool = await get_pool()
+    jid = None
+    if jurisdiction_code:
+        jid = await pool.fetchval("SELECT id FROM jurisdictions WHERE code = $1", jurisdiction_code)
+        if not jid:
+            return json.dumps({"error": f"Unknown jurisdiction_code: {jurisdiction_code}"})
+
+    entity_type_id = None
+    if entity_type_code:
+        entity_type_id = await pool.fetchval("SELECT id FROM entity_types WHERE code = $1", entity_type_code)
+        if not entity_type_id:
+            return json.dumps({"error": f"Unknown entity_type_code: {entity_type_code}"})
+
+    if obligation_id:
+        row = await pool.fetchrow(
+            """UPDATE compliance_obligations
+               SET title=$1,
+                   obligation_type=$2,
+                   jurisdiction_id=$3,
+                   entity_type_id=$4,
+                   recurrence=$5,
+                   due_rule=$6,
+                   grace_days=$7,
+                   penalty_notes=$8,
+                   default_owner_person_id=$9,
+                   active=$10,
+                   updated_at=now()
+               WHERE id=$11
+               RETURNING *""",
+            title,
+            obligation_type.strip().lower(),
+            jid,
+            entity_type_id,
+            recurrence.strip().lower(),
+            due_rule,
+            grace_days,
+            penalty_notes,
+            default_owner_person_id,
+            active,
+            obligation_id,
+        )
+    else:
+        row = await pool.fetchrow(
+            """INSERT INTO compliance_obligations (
+                   title, obligation_type, jurisdiction_id, entity_type_id,
+                   recurrence, due_rule, grace_days, penalty_notes, default_owner_person_id, active
+               ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+               RETURNING *""",
+            title,
+            obligation_type.strip().lower(),
+            jid,
+            entity_type_id,
+            recurrence.strip().lower(),
+            due_rule,
+            grace_days,
+            penalty_notes,
+            default_owner_person_id,
+            active,
+        )
+    return json.dumps(_row_to_dict(row))
+
+
+@mcp.tool()
+async def update_compliance_instance_status(
+    compliance_instance_id: int,
+    status: str,
+    assigned_to_person_id: int | None = None,
+    rejection_reason: str | None = None,
+    completion_notes: str | None = None,
+) -> str:
+    """Update lifecycle status for a compliance instance."""
+    normalized_status = (status or "").strip().lower()
+    valid_statuses = {"pending", "in_progress", "submitted", "accepted", "rejected", "waived"}
+    if normalized_status not in valid_statuses:
+        return json.dumps({"error": f"Invalid status: {status}", "valid_statuses": sorted(valid_statuses)})
+
+    submitted_at = None
+    accepted_at = None
+    rejected_at = None
+    if normalized_status == "submitted":
+        submitted_at = datetime.utcnow()
+    elif normalized_status == "accepted":
+        accepted_at = datetime.utcnow()
+    elif normalized_status == "rejected":
+        rejected_at = datetime.utcnow()
+
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        """UPDATE compliance_instances
+           SET status=$1,
+               assigned_to_person_id=COALESCE($2, assigned_to_person_id),
+               rejection_reason=COALESCE($3, rejection_reason),
+               completion_notes=COALESCE($4, completion_notes),
+               submitted_at=COALESCE($5, submitted_at),
+               accepted_at=COALESCE($6, accepted_at),
+               rejected_at=COALESCE($7, rejected_at),
+               updated_at=now()
+           WHERE id=$8
+           RETURNING *""",
+        normalized_status,
+        assigned_to_person_id,
+        rejection_reason,
+        completion_notes,
+        submitted_at,
+        accepted_at,
+        rejected_at,
+        compliance_instance_id,
+    )
+    if not row:
+        return json.dumps({"error": f"Compliance instance {compliance_instance_id} not found"})
+    return json.dumps(_row_to_dict(row))
+
+
+@mcp.tool()
+async def link_compliance_evidence(
+    compliance_instance_id: int,
+    evidence_type: str,
+    paperless_doc_id: int | None = None,
+    evidence_ref: str | None = None,
+    status: str = "submitted",
+    notes: str | None = None,
+) -> str:
+    """Attach filing evidence to a compliance instance."""
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        """INSERT INTO compliance_evidence (
+               compliance_instance_id, paperless_doc_id, evidence_type, evidence_ref, status, notes
+           ) VALUES ($1,$2,$3,$4,$5,$6)
+           RETURNING *""",
+        compliance_instance_id,
+        paperless_doc_id,
+        evidence_type.strip().lower(),
+        evidence_ref,
+        status.strip().lower(),
+        notes,
     )
     return json.dumps(_row_to_dict(row))
 

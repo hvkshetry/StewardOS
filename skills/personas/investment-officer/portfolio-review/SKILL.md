@@ -1,6 +1,13 @@
 ---
 name: portfolio-review
-description: Unified portfolio review workflow for both command-driven health checks and client review meeting preparation.
+description: >
+  This skill should be used when the user asks for a portfolio review, portfolio
+  health check, risk check, portfolio risk analysis, concentration check,
+  allocation drift analysis, tax loss harvesting scan, or client review meeting
+  prep. It produces a full diagnostic covering positions, risk (ES, VaR,
+  volatility, vol regime, Student-t fit, illiquid overlay), allocation drift,
+  TLH candidates, and actionable recommendations. For a formatted client-facing
+  report without the diagnostic depth, use client-report instead.
 user-invocable: true
 ---
 
@@ -17,7 +24,8 @@ It supports two closely related modes in one playbook:
 
 - Portfolio baseline and performance: `ghostfolio.portfolio(operation="summary")`, `ghostfolio.portfolio(operation="performance", range="1y")`, `ghostfolio.portfolio(operation="dividends", range="1y")`
 - Portfolio state, risk, drift, and TLH: `portfolio-analytics.get_condensed_portfolio_state`, `portfolio-analytics.analyze_portfolio_risk`, `portfolio-analytics.analyze_allocation_drift`, `portfolio-analytics.find_tax_loss_harvesting_candidates`, `portfolio-analytics.validate_account_taxonomy`
-- Tax overlay: `household-tax.compare_tax_scenarios`
+- Illiquid risk pre-flight: `risk-model-config` skill (assembles `illiquid_overrides` from `finance-graph`)
+- Tax overlay: `household-tax.compare_scenarios`
 - Market/policy context: `market-intel-direct.get_market_snapshot`, `market-intel-direct.search_market_news`, `policy-events.get_recent_bills`, `policy-events.get_federal_rules`
 - Disclosure overlays: `sec-edgar.sec_edgar_filing`, `sec-edgar.sec_edgar_insider`
 
@@ -32,8 +40,15 @@ It supports two closely related modes in one playbook:
 
 ### 2. Run Risk and Concentration Checks
 
-- Run `portfolio-analytics.analyze_portfolio_risk` for ES(97.5%), VaR, volatility, and max drawdown.
-- If ES > 2.5%: flag **RISK ALERT LEVEL 3** and discourage new risk additions.
+- If the portfolio contains illiquid or private holdings, run the `risk-model-config` skill first to assemble `illiquid_overrides` from finance-graph metadata.
+- Run `portfolio-analytics.analyze_portfolio_risk(risk_model="auto", include_fx_risk=true, illiquid_overrides=<from risk-model-config if applicable>)` for ES(97.5%), VaR, volatility, max drawdown, Student-t fit, FX exposure, and vol regime.
+- If `risk_data_integrity.weight_coverage_pct < 0.90`: note that risk is computed on a partial portfolio and tail risk is likely understated.
+- If `risk.status == "unreliable"`: note coverage below 50% and treat all risk metrics as directional only.
+- If `risk.status == "critical"` or `illiquid_overlay.adjusted_es_975_1d > 0.025`: flag **RISK ALERT LEVEL 3** and discourage new risk additions.
+- Review `vol_regime.current_regime` — if elevated or crisis, highlight the short-vs-long vol ratio and `stress_es_975_1d`.
+- If `risk-model-config` produced stressed overrides (regime ≠ normal), report both base and stressed ES side-by-side.
+- Review `risk.student_t_fit` — if `fat_tailed: true`, note the degrees-of-freedom and parametric vs historical ES difference.
+- For decomposition detail (component VaR, risk attribution), use `include_decomposition=true`.
 - Flag concentration issues (for example, any single position >10% or correlated concentration clusters).
 
 ### 3. Evaluate Allocation Drift and Trade Context
@@ -47,7 +62,7 @@ It supports two closely related modes in one playbook:
 - Run `portfolio-analytics.find_tax_loss_harvesting_candidates` (typically taxable accounts only).
 - For taxable brokerage-only scans, use `scope_account_types=["brokerage"]`.
 - Include wash sale constraints and estimated tax savings.
-- If material decisions are pending, run `household-tax.compare_tax_scenarios`.
+- If material decisions are pending, run `household-tax.compare_scenarios`.
 
 ### 5. Add Optional Context Layers
 
@@ -68,10 +83,22 @@ It supports two closely related modes in one playbook:
 - Total Value: $X | Unrealized P&L: $Y
 - Scope: [entity/wrapper/account types]
 
+### Risk Data Integrity
+- Weight Coverage: XX.X% | Missing: [symbols]
+- Model: [resolved model: historical or student_t] | Tail Observations: N
+
 ### Risk
-- ES (97.5%): X.XX% [OK/ALERT]
-- VaR (95%): X.XX%
-- Max Drawdown: X.XX%
+- ES (97.5%): X.XX% [OK/CRITICAL/UNRELIABLE] (historical: X.XX% | parametric: X.XX%)
+- VaR (95%): X.XX% | VaR (97.5%): X.XX%
+- Annualized Vol: X.XX% | Max Drawdown: X.XX%
+- Student-t fit: df=X.X [fat-tailed: yes/no]
+- Vol Regime: [low/normal/elevated/crisis] (ratio: X.XX)
+- FX Exposure: X.X% non-USD [adjusted: yes/no]
+
+### Illiquid Overlay (if applicable)
+- Illiquid Weight: X.X% | Base Adjusted ES: X.XX%
+- Stressed ES (regime-adjusted): X.XX% [only if regime ≠ normal]
+- Positions: [list with vol/ρ assumptions, staleness flags]
 
 ### Allocation Drift
 | Symbol | Current | Target | Drift | Action |

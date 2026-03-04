@@ -54,10 +54,10 @@ DEFAULT_MACRO_SERIES = {
 
 CFTC_FINANCIAL_FUTURES_ENDPOINT = "https://publicreporting.cftc.gov/resource/gpe5-46if.json"
 CFTC_MAX_ROWS = 5000
-DEFAULT_GDELT_CONNECT_TIMEOUT_SEC = 4.0
-DEFAULT_GDELT_READ_TIMEOUT_SEC = 8.0
-DEFAULT_GDELT_MAX_ATTEMPTS = 3
-DEFAULT_GDELT_TOTAL_TIMEOUT_SEC = 20.0
+_TICKER_RE = re.compile(r'^[A-Z]{1,5}$|^\^[A-Z]{2,6}$|^[A-Z]{1,5}[=.][A-Z]{1,2}$|^[A-Z]{1,5}-[A-Z]{2,4}$')
+_GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
+_NEWS_CONNECT_TIMEOUT_SEC = 5.0
+_NEWS_READ_TIMEOUT_SEC = 8.0
 
 CFTC_POSITION_FIELDS = {
     "dealer": (
@@ -250,43 +250,117 @@ def _normalize_cot_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _sanitize_gdelt_query(query: str) -> str:
-    """Normalize punctuation-heavy market queries for GDELT compatibility."""
-    normalized = " ".join((query or "").strip().split())
-    if not normalized:
-        return ""
-
-    normalized = normalized.replace("&", " and ")
-    normalized = normalized.replace("/", " ")
-    # Remove punctuation that often triggers malformed upstream responses.
-    normalized = re.sub(r"[^A-Za-z0-9\s\.-]", " ", normalized)
-    normalized = " ".join(normalized.split())
-    return normalized
+def _is_ticker_query(query: str) -> bool:
+    """Detect if query is a stock/index/futures ticker vs a broad text search."""
+    return bool(_TICKER_RE.match(query.strip()))
 
 
-def _gdelt_query_variants(query: str, source_country: str | None) -> list[str]:
-    """Build fallback query variants, with and without source-country filters."""
-    base = " ".join((query or "").strip().split())
-    sanitized = _sanitize_gdelt_query(base)
+async def _fetch_google_news_rss(
+    query: str, days_back: int, limit: int,
+) -> list[dict[str, Any]]:
+    """Fetch articles from Google News RSS feed, filtered by days_back."""
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
 
-    ordered_bases: list[str] = []
-    for candidate in (base, sanitized):
-        if candidate and candidate not in ordered_bases:
-            ordered_bases.append(candidate)
+    params = {"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"}
+    timeout_cfg = httpx.Timeout(
+        timeout=_NEWS_READ_TIMEOUT_SEC,
+        connect=_NEWS_CONNECT_TIMEOUT_SEC,
+        read=_NEWS_READ_TIMEOUT_SEC,
+    )
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    articles: list[dict[str, Any]] = []
 
-    country = (source_country or "").strip().upper()
-    variants: list[str] = []
-    for candidate in ordered_bases:
-        if country:
-            variants.append(f"{candidate} sourcecountry:{country}")
-        variants.append(candidate)
+    async with httpx.AsyncClient(timeout=timeout_cfg) as client:
+        resp = await client.get(_GOOGLE_NEWS_RSS_URL, params=params)
+        resp.raise_for_status()
 
-    # Preserve order while dropping duplicates.
-    deduped: list[str] = []
-    for candidate in variants:
-        if candidate and candidate not in deduped:
-            deduped.append(candidate)
-    return deduped
+    root = ET.fromstring(resp.text)
+    for item in root.iter("item"):
+        title_el = item.find("title")
+        link_el = item.find("link")
+        pub_el = item.find("pubDate")
+        source_el = item.find("source")
+        if title_el is None or link_el is None:
+            continue
+
+        pub_date: datetime | None = None
+        seendate_iso = ""
+        if pub_el is not None and pub_el.text:
+            try:
+                pub_date = parsedate_to_datetime(pub_el.text)
+                seendate_iso = pub_date.isoformat()
+            except (ValueError, TypeError):
+                pass
+
+        if pub_date is not None and pub_date < cutoff:
+            continue
+
+        articles.append({
+            "title": (title_el.text or "").strip(),
+            "url": (link_el.text or "").strip(),
+            "source": (source_el.text if source_el is not None and source_el.text else ""),
+            "seendate": seendate_iso,
+            "language": "en",
+        })
+        if len(articles) >= limit:
+            break
+
+    return articles
+
+
+async def _fetch_yfinance_ticker_news(
+    symbol: str, days_back: int, limit: int,
+) -> list[dict[str, Any]]:
+    """Fetch ticker-specific news via yfinance Ticker.get_news()."""
+    cutoff_ts = (datetime.now(timezone.utc) - timedelta(days=days_back)).timestamp()
+
+    def _sync_fetch() -> list[dict[str, Any]]:
+        ticker = yf.Ticker(symbol)
+        try:
+            raw = ticker.get_news(count=min(limit, 25))
+        except Exception:
+            raw = getattr(ticker, "news", None) or []
+        if not isinstance(raw, list):
+            return []
+        articles: list[dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content") or item
+            pub_ts = content.get("pubDate") or item.get("providerPublishTime")
+            if isinstance(pub_ts, str):
+                try:
+                    from email.utils import parsedate_to_datetime
+                    pub_dt = parsedate_to_datetime(pub_ts)
+                    pub_ts_epoch = pub_dt.timestamp()
+                    seendate_iso = pub_dt.isoformat()
+                except (ValueError, TypeError):
+                    pub_ts_epoch = 0
+                    seendate_iso = pub_ts
+            elif isinstance(pub_ts, (int, float)) and pub_ts > 0:
+                pub_ts_epoch = float(pub_ts)
+                seendate_iso = datetime.fromtimestamp(pub_ts_epoch, tz=timezone.utc).isoformat()
+            else:
+                pub_ts_epoch = 0
+                seendate_iso = ""
+            if pub_ts_epoch > 0 and pub_ts_epoch < cutoff_ts:
+                continue
+            title = content.get("title") or item.get("title", "")
+            link = (content.get("canonicalUrl") or {}).get("url") or item.get("link", "")
+            publisher = content.get("provider", {}).get("displayName") or item.get("publisher", "")
+            articles.append({
+                "title": title,
+                "url": link,
+                "source": publisher,
+                "seendate": seendate_iso,
+                "language": "en",
+            })
+            if len(articles) >= limit:
+                break
+        return articles
+
+    return await asyncio.to_thread(_sync_fetch)
 
 
 async def _fetch_fred_observations(
@@ -997,11 +1071,11 @@ async def search_market_news(
     limit: int = 20,
     source_country: str = "US",
 ) -> dict[str, Any]:
-    """Search market news via GDELT DOC API without OpenBB."""
+    """Search market news via Google News RSS (broad queries) or yfinance (ticker queries)."""
     query = (query or "").strip()
     if len(query) < 3:
         return _error_response(
-            source="gdelt",
+            source="news",
             error_code="invalid_input",
             message="query must be at least 3 characters",
             retryable=False,
@@ -1010,274 +1084,70 @@ async def search_market_news(
 
     days_back = max(1, min(_coerce_int(days_back, 3), 30))
     limit = max(1, min(_coerce_int(limit, 20), 50))
-
-    mode = "ArtList"
-    max_records = limit
-    sort = "DateDesc"
-    variants = _gdelt_query_variants(query, source_country)
-    if not variants:
-        return _error_response(
-            source="gdelt",
-            error_code="invalid_input",
-            message="query normalization produced an empty search term",
-            retryable=False,
-            details={"query": query},
-        )
-
-    # GDELT supports date windows via startdatetime/enddatetime (UTC, YYYYMMDDHHMMSS)
-    end_dt = datetime.now(timezone.utc)
-    start_dt = end_dt - timedelta(days=days_back)
-
-    base_params = {
-        "mode": mode,
-        "format": "json",
-        "maxrecords": max_records,
-        "sort": sort,
-        "startdatetime": start_dt.strftime("%Y%m%d%H%M%S"),
-        "enddatetime": end_dt.strftime("%Y%m%d%H%M%S"),
-    }
-
-    connect_timeout = max(
-        1.0,
-        _coerce_float(os.getenv("GDELT_CONNECT_TIMEOUT_SEC")) or DEFAULT_GDELT_CONNECT_TIMEOUT_SEC,
-    )
-    read_timeout = max(
-        1.0,
-        _coerce_float(os.getenv("GDELT_READ_TIMEOUT_SEC")) or DEFAULT_GDELT_READ_TIMEOUT_SEC,
-    )
-    max_attempts = max(
-        1,
-        min(_coerce_int(os.getenv("GDELT_MAX_ATTEMPTS"), DEFAULT_GDELT_MAX_ATTEMPTS), 6),
-    )
-    total_timeout_sec = max(
-        read_timeout + 1.0,
-        _coerce_float(os.getenv("GDELT_TOTAL_TIMEOUT_SEC")) or DEFAULT_GDELT_TOTAL_TIMEOUT_SEC,
-    )
-
     started_at = time.monotonic()
-    attempt_records: list[dict[str, Any]] = []
+    ticker_mode = _is_ticker_query(query)
+    articles: list[dict[str, Any]] = []
+    provider: str = ""
+    fallback_used = False
 
     try:
-        timeout_cfg = httpx.Timeout(
-            timeout=max(connect_timeout, read_timeout),
-            connect=connect_timeout,
-            read=read_timeout,
-            write=read_timeout,
-            pool=connect_timeout,
-        )
-        async with asyncio.timeout(total_timeout_sec):
-            async with httpx.AsyncClient(timeout=timeout_cfg) as client:
-                response: httpx.Response | None = None
-                payload: dict[str, Any] | None = None
-                resolved_query: str | None = None
-                last_error: Exception | None = None
-                attempts_by_variant: dict[str, str] = {}
-
-                for variant in variants:
-                    params = {**base_params, "query": variant}
-                    variant_error: Exception | None = None
-
-                    for attempt in range(max_attempts):
-                        attempt_no = attempt + 1
-                        try:
-                            candidate = await client.get("https://api.gdeltproject.org/api/v2/doc/doc", params=params)
-                        except (httpx.TimeoutException, httpx.RequestError) as exc:
-                            attempt_records.append(
-                                {
-                                    "variant": variant,
-                                    "attempt": attempt_no,
-                                    "kind": "request_error",
-                                    "error": str(exc),
-                                }
-                            )
-                            variant_error = exc
-                            if attempt < max_attempts - 1:
-                                await asyncio.sleep(_retry_delay_seconds(attempt))
-                                continue
-                            break
-
-                        is_retryable_status = candidate.status_code == 429 or 500 <= candidate.status_code <= 599
-                        if is_retryable_status and attempt < max_attempts - 1:
-                            attempt_records.append(
-                                {
-                                    "variant": variant,
-                                    "attempt": attempt_no,
-                                    "kind": "http_status_retry",
-                                    "status_code": candidate.status_code,
-                                }
-                            )
-                            await asyncio.sleep(_retry_delay_seconds(attempt))
-                            continue
-
-                        try:
-                            candidate.raise_for_status()
-                            parsed = candidate.json()
-                            if isinstance(parsed, dict):
-                                response = candidate
-                                payload = parsed
-                                resolved_query = variant
-                                attempt_records.append(
-                                    {
-                                        "variant": variant,
-                                        "attempt": attempt_no,
-                                        "kind": "success",
-                                        "status_code": candidate.status_code,
-                                    }
-                                )
-                                break
-                            variant_error = RuntimeError("GDELT returned non-dict JSON payload.")
-                        except ValueError as exc:
-                            variant_error = RuntimeError(f"GDELT returned invalid JSON payload: {exc}")
-                        except httpx.HTTPStatusError as exc:
-                            variant_error = exc
-                        except Exception as exc:  # pragma: no cover - defensive
-                            variant_error = exc
-
-                        attempt_records.append(
-                            {
-                                "variant": variant,
-                                "attempt": attempt_no,
-                                "kind": "parse_or_status_error",
-                                "error": str(variant_error),
-                            }
-                        )
-                        if attempt < max_attempts - 1:
-                            await asyncio.sleep(_retry_delay_seconds(attempt))
-
-                    if payload is not None and response is not None:
-                        break
-
-                    if variant_error is not None:
-                        attempts_by_variant[variant] = str(variant_error)
-                        last_error = variant_error
-
-                if payload is None or response is None or resolved_query is None:
-                    elapsed = round(time.monotonic() - started_at, 3)
-                    if isinstance(last_error, httpx.HTTPStatusError) and last_error.response.status_code == 429:
-                        retry_after = last_error.response.headers.get("Retry-After")
-                        return _error_response(
-                            source="gdelt",
-                            error_code="rate_limited",
-                            message="GDELT rate limit reached.",
-                            retryable=True,
-                            details={
-                                "retry_after": retry_after,
-                                "variants_tried": variants,
-                                "attempts_by_variant": attempts_by_variant,
-                            },
-                            extra={
-                                "query": query,
-                                "days_back": days_back,
-                                "count": 0,
-                                "articles": [],
-                                "diagnostics": {
-                                    "elapsed_seconds": elapsed,
-                                    "max_attempts": max_attempts,
-                                    "total_timeout_seconds": total_timeout_sec,
-                                    "connect_timeout_seconds": connect_timeout,
-                                    "read_timeout_seconds": read_timeout,
-                                    "attempts": attempt_records,
-                                },
-                            },
-                        )
-                    if last_error is not None:
-                        raise RuntimeError(f"{last_error}; variants_tried={len(variants)}")
-                    raise RuntimeError("No valid response from GDELT")
-    except TimeoutError:
-        elapsed = round(time.monotonic() - started_at, 3)
-        return _error_response(
-            source="gdelt",
-            error_code="upstream_timeout",
-            message="Timed out while fetching GDELT news within configured timeout budget.",
-            retryable=True,
-            details={
-                "query": query,
-                "variants_tried": variants,
-                "max_attempts": max_attempts,
-                "total_timeout_seconds": total_timeout_sec,
-                "connect_timeout_seconds": connect_timeout,
-                "read_timeout_seconds": read_timeout,
-                "elapsed_seconds": elapsed,
-            },
-            extra={
-                "query": query,
-                "days_back": days_back,
-                "count": 0,
-                "articles": [],
-                "diagnostics": {
-                    "elapsed_seconds": elapsed,
-                    "max_attempts": max_attempts,
-                    "total_timeout_seconds": total_timeout_sec,
-                    "connect_timeout_seconds": connect_timeout,
-                    "read_timeout_seconds": read_timeout,
-                    "attempts": attempt_records,
-                },
-            },
-        )
+        if ticker_mode:
+            # Primary: yfinance ticker news
+            provider = "yfinance"
+            try:
+                articles = await _fetch_yfinance_ticker_news(query, days_back, limit)
+            except Exception:
+                articles = []
+            if not articles:
+                # Fallback: Google News RSS with ticker as search term
+                provider = "google_news"
+                fallback_used = True
+                articles = await _fetch_google_news_rss(query, days_back, limit)
+        else:
+            # Primary: Google News RSS
+            provider = "google_news"
+            try:
+                articles = await _fetch_google_news_rss(query, days_back, limit)
+            except Exception:
+                articles = []
+            if not articles:
+                # Fallback: try as ticker in case it's an unrecognized symbol
+                provider = "yfinance"
+                fallback_used = True
+                articles = await _fetch_yfinance_ticker_news(query, days_back, limit)
     except Exception as exc:
         elapsed = round(time.monotonic() - started_at, 3)
         return _error_response(
-            source="gdelt",
+            source=provider or "news",
             error_code="upstream_request_failed",
-            message=f"Failed to fetch GDELT news: {exc}",
+            message=f"Failed to fetch news: {exc}",
             retryable=True,
             details={
                 "query": query,
-                "variants_tried": variants,
+                "ticker_mode": ticker_mode,
                 "elapsed_seconds": elapsed,
-                "max_attempts": max_attempts,
-                "total_timeout_seconds": total_timeout_sec,
             },
             extra={
                 "query": query,
                 "days_back": days_back,
                 "count": 0,
                 "articles": [],
-                "diagnostics": {
-                    "elapsed_seconds": elapsed,
-                    "max_attempts": max_attempts,
-                    "total_timeout_seconds": total_timeout_sec,
-                    "connect_timeout_seconds": connect_timeout,
-                    "read_timeout_seconds": read_timeout,
-                    "attempts": attempt_records,
-                },
             },
         )
 
-    articles = payload.get("articles", [])
-    rows: list[dict[str, Any]] = []
-
-    for article in articles[:limit]:
-        if not isinstance(article, dict):
-            continue
-        rows.append(
-            {
-                "title": article.get("title"),
-                "url": article.get("url"),
-                "source": article.get("sourcecountry") or article.get("domain"),
-                "seendate": article.get("seendate"),
-                "language": article.get("language"),
-                "tone": article.get("tone"),
-            }
-        )
-
+    elapsed = round(time.monotonic() - started_at, 3)
     return {
         "ok": True,
         "as_of": datetime.now(timezone.utc).isoformat(),
         "query": query,
-        "query_used": resolved_query,
-        "variants_tried": variants,
         "days_back": days_back,
-        "count": len(rows),
-        "articles": rows,
-        "source": "gdelt",
+        "count": len(articles),
+        "articles": articles,
+        "source": provider,
         "diagnostics": {
-            "elapsed_seconds": round(time.monotonic() - started_at, 3),
-            "max_attempts": max_attempts,
-            "total_timeout_seconds": total_timeout_sec,
-            "connect_timeout_seconds": connect_timeout,
-            "read_timeout_seconds": read_timeout,
-            "attempts": attempt_records,
+            "elapsed_seconds": elapsed,
+            "ticker_mode": ticker_mode,
+            "fallback_used": fallback_used,
         },
     }
 

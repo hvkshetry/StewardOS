@@ -1,152 +1,38 @@
 ---
 name: financial-planning
-description: Build or update a comprehensive financial plan covering retirement projections, education funding, estate planning, and cash flow analysis.
+description: Build or update a comprehensive household financial plan using integrated net-worth, cashflow, and household-tax v2 scenario analysis.
 user-invocable: false
 ---
 
 # Financial Plan
 
+Use tool-first baselines and v2 scenario optimization to produce an actionable multi-year plan.
+
 ## MCP Tool Map
 
-- Household cash flow and spending: `actual-budget.analytics(operation="monthly_summary")`, `actual-budget.analytics(operation="spending_by_category")`
-- Household tax projection: `household-tax.estimate_quarterly_1040es`, `household-tax.compare_tax_scenarios`, `household-tax.project_safe_harbor`
-- Portfolio baseline (read-only): `ghostfolio.portfolio(operation="summary")`
-- Illiquid assets and liabilities: `finance-graph.get_net_worth_summary`, `finance-graph.get_liabilities`
+- Cashflow reality: `actual-budget.analytics(operation="monthly_summary")`, `actual-budget.analytics(operation="spending_by_category")`
+- Investments: `ghostfolio.portfolio(operation="summary")`, `ghostfolio.portfolio(operation="dividends")`
+- Net worth and liabilities: `finance-graph.get_net_worth`, `finance-graph.get_liability_summary`, `finance-graph.list_liabilities`
+- Tax evidence: `paperless.search_documents`, `paperless.get_document`
+- Tax strategy engine: `household-tax.upsert_tax_profile`, `household-tax.optimize_strategy`, `household-tax.compare_scenarios`, `household-tax.explain_recommendation`
 
 ## Workflow
 
-### Step 1: Household Profile
+1. Build household baseline (income, spend, portfolio, liabilities, net worth) from MCP tools.
+2. Ingest and reconcile tax-document evidence from Paperless for key assumptions.
+3. Persist/update planning profile via `upsert_tax_profile`.
+4. Run strategy groups in `household-tax`:
+- `comprehensive_household_tax`
+- `business_owner_planning`
+- `trust_distribution_policy`
+5. Compare objective-aligned recommendations (default `max_end_net_worth`, 5-year horizon).
+6. Present prioritized actions with expected tax, cashflow, and end-net-worth deltas.
 
-Gather or confirm:
-- **Demographics**: Age, spouse age, dependents, life expectancy assumptions
-- **Employment**: Current income, expected raises, retirement age target
-- **Accounts**: All investment accounts with balances and asset allocation
-- **Income sources**: Salary, bonuses, rental income, Social Security estimates, pensions
-- **Expenses**: Current annual spending, expected changes (mortgage payoff, kids' independence)
-- **Liabilities**: Mortgage, student loans, other debt
-- **Insurance**: Life, disability, LTC, health
-- **Estate**: Wills, trusts, beneficiary designations, gifting strategy
+## Output Contract
 
-### Step 2: Cash Flow Analysis
-
-Build annual cash flow projections:
-
-| Year | Age | Gross Income | Taxes | Living Expenses | Savings | Net Cash Flow |
-|------|-----|-------------|-------|-----------------|---------|--------------|
-| | | | | | | |
-
-Key inputs:
-- Inflation rate assumption (typically 2.5-3%)
-- Tax rate (marginal and effective)
-- Savings rate and where savings are directed (pre-tax, Roth, taxable)
-- Use `actual-budget.analytics(operation="monthly_summary")` and `actual-budget.analytics(operation="spending_by_category")` as source data when available
-
-### Step 3: Retirement Projections
-
-**Accumulation Phase:**
-- Current portfolio value (from `ghostfolio.portfolio(operation="summary")`)
-- Annual contributions (401k, IRA, taxable)
-- Expected return by asset class
-- Scenario analysis: probability of success at various spending levels (use deterministic projections with scenario tables; Monte Carlo simulation is a future capability)
-
-**Distribution Phase:**
-- Required annual spending in retirement (today's dollars, inflation-adjusted)
-- Social Security start age and benefit
-- Pension income (if any)
-- Portfolio withdrawal rate and sequence
-- Required Minimum Distributions (RMDs)
-
-**Key Output:**
-- Projected portfolio value at retirement
-- Sustainable withdrawal rate
-- Probability of not running out of money (target >85%)
-- "What if" scenarios: retire early, market downturn, higher spending
-
-### Step 4: Goal-Specific Analysis
-
-#### Education Funding
-- Children's ages and target college start
-- Current 529 balances
-- Target funding level (public vs. private, 4-year vs. graduate)
-- Required monthly savings to reach goal
-- Financial aid considerations
-
-#### Estate Planning
-- Current estate value and projected growth
-- Estate tax exposure (federal and state)
-- Trust structures in place
-- Gifting strategy (annual exclusion, lifetime exemption usage)
-- Charitable giving plans
-- Beneficiary review
-
-#### Risk Management
-- Life insurance needs analysis (income replacement, debt payoff, education funding)
-- Disability insurance adequacy
-- Long-term care planning
-- Umbrella liability coverage
-
-### Step 5: Scenario Modeling
-
-Run key scenarios:
-
-| Scenario | Probability of Success | Portfolio at 90 | Notes |
-|----------|----------------------|-----------------|-------|
-| Base case | | | |
-| Retire 2 years early | | | |
-| 20% market drop in Year 1 | | | |
-| Higher spending (+20%) | | | |
-| One spouse lives to 95 | | | |
-| Long-term care event | | | |
-
-Run tax-aware comparisons on major scenarios with `household-tax.compare_tax_scenarios`.
-
-### Step 6: Recommendations
-
-Prioritized action items:
-1. Savings rate changes
-2. Asset allocation adjustments
-3. Tax optimization (Roth conversions, tax-loss harvesting, asset location)
-4. Insurance gaps to fill
-5. Estate document updates
-6. Beneficiary designation review
-
-### Step 7: Output
-
-```
-## Financial Plan — [Household Name] — [Date]
-
-### Executive Summary
-- Current net worth: $X
-- Retirement readiness: [On Track / Needs Attention / At Risk]
-- Key recommendations: [1-3 bullet points]
-
-### Cash Flow Projection
-[Table from Step 2]
-
-### Retirement Analysis
-[Projections from Step 3]
-
-### Goal Progress
-[Education, estate, risk findings from Step 4]
-
-### Scenario Results
-[Table from Step 5]
-
-### Action Items (Prioritized)
-[Recommendations from Step 6]
-```
-
-Deliverables:
-- Financial plan document (15-25 pages)
-- Cash flow projection table
-- Retirement projection with scenario comparison
-- Goal funding analysis
-- Action item checklist
-
-## Important Notes
-
-- Financial plans are living documents — review and update annually or after major life events
-- Be conservative with return assumptions — overestimating returns gives false confidence
-- Tax planning is as important as investment returns — model tax implications of every recommendation
-- Social Security timing is a major lever — model start ages of 62, 67, and 70
-- Always stress-test the plan — a plan that only works in the base case isn't a good plan
+Always include:
+- baseline snapshot (`as_of`, net worth, cashflow, liabilities)
+- scenarios run and ranking criteria
+- recommended strategy set with tradeoffs
+- assumptions + sensitivity notes
+- provenance and data gaps

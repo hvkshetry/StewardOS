@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 from fastmcp import FastMCP
+from scipy.stats import t as student_t
 
 
 server = FastMCP("portfolio-analytics")
@@ -750,6 +751,13 @@ def _holding_cost(holding: dict[str, Any]) -> float:
     return quantity * unit_cost
 
 
+_CASH_LIKE_SYMBOLS = {
+    "USD", "USX", "CASH", "EUR", "GBP", "CHF", "JPY", "CAD", "AUD",
+    "HKD", "SGD", "INR", "CNY", "KRW", "TWD", "NZD", "SEK", "NOK",
+    "DKK", "MXN", "BRL", "ZAR",
+}
+
+
 def _is_cash_like_holding(holding: dict[str, Any]) -> bool:
     symbol = _holding_symbol(holding)
     asset_class = str(holding.get("assetClass", "")).strip().upper()
@@ -757,7 +765,7 @@ def _is_cash_like_holding(holding: dict[str, Any]) -> bool:
     return (
         asset_sub_class == "CASH"
         or asset_class == "LIQUIDITY"
-        or symbol in {"USD", "USX", "CASH", "EUR", "GBP", "CHF", "JPY"}
+        or symbol in _CASH_LIKE_SYMBOLS
     )
 
 
@@ -800,16 +808,24 @@ def _aggregate_holdings(holdings: list[dict[str, Any]]) -> dict[str, dict[str, A
     return aggregated
 
 
-def _weights_from_aggregated(aggregated: dict[str, dict[str, Any]]) -> tuple[dict[str, float], float]:
-    total_value = sum(max(v["value"], 0.0) for v in aggregated.values())
+def _weights_from_aggregated(
+    aggregated: dict[str, dict[str, Any]],
+    clip_negatives: bool = True,
+) -> tuple[dict[str, float], float]:
+    if clip_negatives:
+        total_value = sum(max(v["value"], 0.0) for v in aggregated.values())
+    else:
+        total_value = sum(v["value"] for v in aggregated.values())
     if total_value <= 0:
         return {}, 0.0
 
-    weights = {
-        symbol: max(payload["value"], 0.0) / total_value
-        for symbol, payload in aggregated.items()
-        if max(payload["value"], 0.0) > 0
-    }
+    weights = {}
+    for symbol, payload in aggregated.items():
+        value = payload["value"]
+        if clip_negatives:
+            value = max(value, 0.0)
+        if abs(value) > 0:
+            weights[symbol] = value / total_value
     return weights, total_value
 
 
@@ -859,23 +875,28 @@ def _normalize_target_allocations(target_allocations: Any) -> dict[str, float]:
     return {k: v / total for k, v in parsed.items()}
 
 
-def _filter_tradeable_symbols(weights: dict[str, float]) -> dict[str, float]:
-    excluded = {"USD", "EUR", "GBP", "CHF", "JPY", "CASH"}
-    return {
-        symbol: weight
-        for symbol, weight in weights.items()
-        if symbol and symbol not in excluded and not symbol.endswith("=X")
+def _filter_tradeable_symbols(weights: dict[str, float]) -> tuple[dict[str, float], list[str]]:
+    excluded = {
+        "USD", "EUR", "GBP", "CHF", "JPY", "CAD", "AUD", "HKD", "SGD",
+        "INR", "CNY", "KRW", "TWD", "NZD", "SEK", "NOK", "DKK", "MXN",
+        "BRL", "ZAR", "CASH",
     }
+    tradeable = {}
+    excluded_symbols = []
+    for symbol, weight in weights.items():
+        if not symbol or symbol in excluded or symbol.endswith("=X"):
+            excluded_symbols.append(symbol)
+        else:
+            tradeable[symbol] = weight
+    return tradeable, excluded_symbols
 
 
-def _download_returns(weights: dict[str, float], lookback_days: int) -> tuple[pd.Series, list[str]]:
-    tradeable = _filter_tradeable_symbols(weights)
-    if not tradeable:
-        return pd.Series(dtype=float), []
-
-    symbols = sorted(tradeable.keys())
+def _download_prices(
+    symbols: list[str],
+    lookback_days: int,
+) -> tuple[pd.DataFrame | None, str | None]:
+    """Download close prices from yfinance. Returns (prices_df, error_message)."""
     start_date = (datetime.now(timezone.utc) - timedelta(days=max(lookback_days * 2, 120))).date().isoformat()
-
     try:
         data = yf.download(
             tickers=symbols,
@@ -884,11 +905,11 @@ def _download_returns(weights: dict[str, float], lookback_days: int) -> tuple[pd
             progress=False,
             threads=False,
         )
-    except Exception:
-        return pd.Series(dtype=float), symbols
+    except Exception as exc:
+        return None, f"yfinance download failed: {type(exc).__name__}: {exc}"
 
     if data is None or data.empty:
-        return pd.Series(dtype=float), symbols
+        return None, "yfinance returned empty data"
 
     if isinstance(data.columns, pd.MultiIndex):
         if "Close" in data.columns.get_level_values(0):
@@ -905,30 +926,125 @@ def _download_returns(weights: dict[str, float], lookback_days: int) -> tuple[pd
             if isinstance(prices, pd.Series):
                 prices = prices.to_frame(name=symbols[0])
 
+    prices.columns = [str(col).upper() for col in prices.columns]
+    return prices, None
+
+
+def _download_returns(
+    weights: dict[str, float],
+    lookback_days: int,
+    holdings_meta: dict[str, dict[str, Any]] | None = None,
+) -> tuple[pd.Series, dict[str, Any]]:
+    original_weight_sum = sum(weights.values())
+    tradeable, excluded_symbols = _filter_tradeable_symbols(weights)
+    tradeable_weight_sum = sum(tradeable.values())
+
+    empty_quality = {
+        "missing_symbols": sorted(tradeable.keys()) if tradeable else [],
+        "excluded_symbols": excluded_symbols,
+        "available_symbols": [],
+        "original_weight_sum": original_weight_sum,
+        "tradeable_weight_sum": tradeable_weight_sum,
+        "available_weight_sum": 0.0,
+        "weight_coverage_pct": 0.0,
+        "renormalized": False,
+        "yfinance_error": None,
+        "observations": 0,
+        "nan_fill_symbols": [],
+        "data_quality_warnings": [],
+    }
+
+    if not tradeable:
+        empty_quality["data_quality_warnings"].append(
+            "No tradeable symbols in portfolio; all positions are cash or excluded."
+        )
+        return pd.Series(dtype=float), empty_quality
+
+    symbols = sorted(tradeable.keys())
+
+    prices, yf_error = _download_prices(symbols, lookback_days)
+    if prices is None or prices.empty:
+        empty_quality["yfinance_error"] = yf_error
+        empty_quality["data_quality_warnings"].append(
+            f"Market data download failed: {yf_error}"
+        )
+        return pd.Series(dtype=float), empty_quality
+
     returns = prices.pct_change().dropna(how="all")
     if returns.empty:
-        return pd.Series(dtype=float), symbols
-
-    # Normalize symbols in case provider casing differs.
-    returns.columns = [str(col).upper() for col in returns.columns]
+        empty_quality["yfinance_error"] = "No return data after pct_change"
+        return pd.Series(dtype=float), empty_quality
 
     available = [s for s in symbols if s in returns.columns]
     if not available:
-        return pd.Series(dtype=float), symbols
+        empty_quality["yfinance_error"] = "No symbols matched in downloaded data"
+        return pd.Series(dtype=float), empty_quality
 
-    weight_sum = sum(tradeable[s] for s in available)
-    if weight_sum <= 0:
-        return pd.Series(dtype=float), symbols
+    # Handle partial NaN rows: forward-fill gaps up to 3 days, then fill remaining with 0
+    # and track which symbols had fills applied
+    nan_fill_symbols = []
+    for sym in available:
+        nan_count = int(returns[sym].isna().sum())
+        if nan_count > 0:
+            nan_fill_symbols.append({"symbol": sym, "nan_days": nan_count})
+    returns[available] = returns[available].ffill(limit=3).fillna(0.0)
 
-    normalized = {s: tradeable[s] / weight_sum for s in available}
+    available_weight_sum = sum(tradeable[s] for s in available)
+    if available_weight_sum <= 0:
+        empty_quality["available_symbols"] = available
+        return pd.Series(dtype=float), empty_quality
+
+    missing = [s for s in symbols if s not in available]
+    renormalized = len(missing) > 0
+    normalized = {s: tradeable[s] / available_weight_sum for s in available}
     weighted = returns[available].mul(pd.Series(normalized), axis=1).sum(axis=1)
     weighted = weighted.tail(lookback_days)
 
-    missing = [s for s in symbols if s not in available]
-    return weighted, missing
+    weight_coverage_pct = available_weight_sum / original_weight_sum if original_weight_sum > 0 else 0.0
+
+    warnings: list[str] = []
+    if weight_coverage_pct < 0.50:
+        warnings.append(
+            f"UNRELIABLE: Risk computed on only {weight_coverage_pct:.1%} of portfolio weight. "
+            f"Missing symbols: {', '.join(missing)}. Tail risk is likely severely understated."
+        )
+    elif weight_coverage_pct < 0.90:
+        warnings.append(
+            f"Risk computed on {weight_coverage_pct:.1%} of portfolio weight; "
+            f"tail risk likely understated. Missing: {', '.join(missing)}."
+        )
+    if renormalized:
+        warnings.append(
+            f"Weights renormalized from {available_weight_sum:.3f} to 1.0 "
+            f"after dropping {len(missing)} symbols without market data."
+        )
+    if nan_fill_symbols:
+        fills_desc = ", ".join(f"{s['symbol']}({s['nan_days']}d)" for s in nan_fill_symbols)
+        warnings.append(f"NaN returns filled (ffill 3d, then 0): {fills_desc}")
+
+    data_quality = {
+        "missing_symbols": missing,
+        "excluded_symbols": excluded_symbols,
+        "available_symbols": available,
+        "original_weight_sum": original_weight_sum,
+        "tradeable_weight_sum": tradeable_weight_sum,
+        "available_weight_sum": available_weight_sum,
+        "weight_coverage_pct": weight_coverage_pct,
+        "renormalized": renormalized,
+        "yfinance_error": yf_error,
+        "observations": int(len(weighted)),
+        "nan_fill_symbols": nan_fill_symbols,
+        "data_quality_warnings": warnings,
+    }
+
+    return weighted, data_quality
 
 
-def _risk_metrics(returns: pd.Series, es_limit: float) -> dict[str, Any]:
+def _risk_metrics(
+    returns: pd.Series,
+    es_limit: float,
+    data_quality: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if returns.empty or len(returns) < 30:
         return {
             "status": "insufficient_data",
@@ -937,14 +1053,24 @@ def _risk_metrics(returns: pd.Series, es_limit: float) -> dict[str, Any]:
             "es_limit": es_limit,
         }
 
+    n = len(returns)
     losses = -returns.values
     var_95 = float(np.quantile(losses, 0.95))
     var_975 = float(np.quantile(losses, 0.975))
 
     tail_95 = losses[losses >= var_95]
     tail_975 = losses[losses >= var_975]
-    es_95 = float(np.mean(tail_95)) if len(tail_95) else var_95
-    es_975 = float(np.mean(tail_975)) if len(tail_975) else var_975
+    tail_975_count = int(len(tail_975))
+
+    if len(tail_95) > 0:
+        es_95 = float(np.mean(tail_95))
+    else:
+        es_95 = var_95
+
+    if tail_975_count > 0:
+        es_975 = float(np.mean(tail_975))
+    else:
+        es_975 = var_975
 
     volatility_annual = float(np.std(returns.values, ddof=1) * np.sqrt(252))
 
@@ -952,20 +1078,571 @@ def _risk_metrics(returns: pd.Series, es_limit: float) -> dict[str, Any]:
     running_max = cumulative.cummax()
     max_drawdown = float(((cumulative / running_max) - 1.0).min())
 
-    status = "critical" if es_975 > es_limit else "ok"
+    # Determine status based on data coverage and ES
+    weight_coverage = 1.0
+    risk_warnings: list[str] = []
+    if data_quality:
+        weight_coverage = data_quality.get("weight_coverage_pct", 1.0)
+        risk_warnings.extend(data_quality.get("data_quality_warnings", []))
+
+    if tail_975_count < 5:
+        risk_warnings.append(
+            f"ES estimate unstable: only {tail_975_count} observations in 97.5% tail "
+            f"(from {n} total). Consider longer lookback or parametric model."
+        )
+    elif tail_975_count < 10:
+        risk_warnings.append(
+            f"ES estimate has limited precision: {tail_975_count} tail observations."
+        )
+
+    if weight_coverage < 0.50:
+        status = "unreliable"
+    elif es_975 > es_limit:
+        status = "critical"
+    else:
+        status = "ok"
 
     return {
         "status": status,
-        "sample_size": int(len(returns)),
+        "sample_size": n,
         "var_95_1d": var_95,
         "var_975_1d": var_975,
         "es_95_1d": es_95,
         "es_975_1d": es_975,
+        "es_975_1d_historical": es_975,
         "es_limit": es_limit,
         "es_utilization": (es_975 / es_limit) if es_limit > 0 else None,
         "annualized_volatility": volatility_annual,
         "max_drawdown": max_drawdown,
+        "tail_sample_size_975": tail_975_count,
+        "risk_warnings": risk_warnings,
     }
+
+
+def _fit_student_t(returns: np.ndarray) -> dict[str, Any] | None:
+    """Fit Student-t distribution via MLE. Returns fit params or None if inappropriate."""
+    if len(returns) < 30:
+        return None
+    try:
+        df, loc, scale = student_t.fit(returns)
+    except Exception:
+        return None
+
+    if df <= 1:
+        # ES undefined for df <= 1
+        return None
+
+    variance_infinite = bool(df <= 2)
+    # If df > 30, tails are effectively normal — historical is fine
+    normal_like = bool(df > 30)
+
+    # KS test p-value vs normal for diagnostics
+    try:
+        from scipy.stats import kstest, norm
+        ks_stat, ks_pvalue = kstest(returns, "norm", args=(np.mean(returns), np.std(returns, ddof=1)))
+    except Exception:
+        ks_pvalue = None
+
+    return {
+        "df": float(df),
+        "loc": float(loc),
+        "scale": float(scale),
+        "variance_infinite": variance_infinite,
+        "normal_like": normal_like,
+        "ks_pvalue_vs_normal": float(ks_pvalue) if ks_pvalue is not None else None,
+        "fat_tailed": bool(not normal_like and df < 30),
+    }
+
+
+def _parametric_es_student_t(
+    df: float,
+    loc: float,
+    scale: float,
+    confidence: float = 0.975,
+) -> float | None:
+    """Closed-form Student-t ES (McNeil, Frey & Embrechts).
+
+    Computes ES on the LOSS distribution: losses = -returns.
+    The loc/scale should be fit on returns, so we negate loc for loss ES.
+    """
+    if df <= 1:
+        return None
+
+    # Quantile of standardized t at confidence level (loss tail)
+    q = student_t.ppf(confidence, df)
+
+    # ES formula for standardized Student-t
+    # ES_std = (df + q^2) / (df - 1) * t.pdf(q, df) / (1 - confidence)
+    es_standardized = ((df + q ** 2) / (df - 1)) * student_t.pdf(q, df) / (1 - confidence)
+
+    # Scale and shift: ES_loss = -loc + scale * ES_std
+    # (negate loc because fit was on returns, ES is on losses)
+    es_loss = -loc + scale * es_standardized
+
+    return float(es_loss)
+
+
+def _risk_metrics_with_model(
+    returns: pd.Series,
+    es_limit: float,
+    data_quality: dict[str, Any] | None = None,
+    risk_model: str = "auto",
+) -> dict[str, Any]:
+    """Extended risk metrics with optional Student-t parametric ES."""
+    base = _risk_metrics(returns, es_limit, data_quality)
+
+    if base.get("status") == "insufficient_data":
+        base["risk_model_used"] = "none"
+        return base
+
+    losses = -returns.values
+    student_t_fit = None
+    parametric_es_975 = None
+    risk_model_used = "historical"
+
+    if risk_model in ("student_t", "auto"):
+        fit = _fit_student_t(returns.values)
+        if fit is not None and not fit["normal_like"]:
+            student_t_fit = fit
+            es_val = _parametric_es_student_t(
+                fit["df"], fit["loc"], fit["scale"], confidence=0.975,
+            )
+            if es_val is not None and es_val > 0:
+                parametric_es_975 = es_val
+                risk_model_used = "student_t"
+
+    historical_es = base["es_975_1d_historical"]
+
+    if risk_model == "auto" and parametric_es_975 is not None:
+        # Conservative envelope: max of historical and parametric
+        effective_es = max(historical_es, parametric_es_975)
+        risk_model_used = "student_t" if parametric_es_975 >= historical_es else "historical"
+    elif risk_model == "student_t" and parametric_es_975 is not None:
+        effective_es = parametric_es_975
+    else:
+        effective_es = historical_es
+        risk_model_used = "historical"
+
+    base["es_975_1d"] = effective_es
+    base["es_975_1d_parametric"] = parametric_es_975
+    base["risk_model_used"] = risk_model_used
+    base["student_t_fit"] = student_t_fit
+
+    # Recompute status with effective ES
+    weight_coverage = 1.0
+    if data_quality:
+        weight_coverage = data_quality.get("weight_coverage_pct", 1.0)
+    if weight_coverage < 0.50:
+        base["status"] = "unreliable"
+    elif effective_es > es_limit:
+        base["status"] = "critical"
+    else:
+        base["status"] = "ok"
+
+    base["es_utilization"] = (effective_es / es_limit) if es_limit > 0 else None
+
+    return base
+
+
+def _compute_illiquid_overlay(
+    illiquid_overrides: list[dict[str, Any]],
+    liquid_vol_annual: float,
+    liquid_weight: float,
+    student_t_fit: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compute portfolio variance expansion including illiquid positions.
+
+    Uses full variance formula:
+      σ_p² = w_L² σ_L² + Σ w_i² σ_i²
+             + 2 Σ w_L w_i ρ_iL σ_i σ_L
+             + 2 Σ_{i<j} w_i w_j ρ_ij σ_i σ_j
+
+    For illiquid-illiquid cross-correlations, uses one-factor model:
+      ρ_ij = ρ_i * ρ_j  (correlation through equity factor)
+    unless explicit overrides are provided.
+    """
+    if not illiquid_overrides:
+        return {"overlay_applied": False}
+
+    illiquid_positions = []
+    total_illiquid_weight = 0.0
+
+    for override in illiquid_overrides:
+        w = _coerce_float(override.get("weight"), 0.0)
+        vol = _coerce_float(override.get("annual_vol"), 0.30)
+        rho = _coerce_float(override.get("rho_equity"), 0.50)
+        discount = _coerce_float(override.get("liquidity_discount"), 0.0)
+        symbol = str(override.get("symbol", "UNKNOWN"))
+
+        if w <= 0:
+            continue
+
+        # liquidity_discount adjusts weight (valuation haircut), not variance
+        effective_weight = w * (1.0 - discount)
+        total_illiquid_weight += effective_weight
+
+        pos_entry: dict[str, Any] = {
+            "symbol": symbol,
+            "weight": effective_weight,
+            "annual_vol": vol,
+            "rho_equity": rho,
+            "liquidity_discount": discount,
+        }
+        # Passthrough optional staleness metadata from skill layer
+        if override.get("valuation_age_days") is not None:
+            pos_entry["valuation_age_days"] = int(override["valuation_age_days"])
+        if override.get("mark_staleness"):
+            pos_entry["mark_staleness"] = str(override["mark_staleness"])
+        illiquid_positions.append(pos_entry)
+
+    if not illiquid_positions:
+        return {"overlay_applied": False}
+
+    # Renormalize weights so liquid + illiquid = 1.0
+    total_weight = liquid_weight + total_illiquid_weight
+    if total_weight <= 0:
+        return {"overlay_applied": False}
+
+    w_L = liquid_weight / total_weight
+    σ_L = liquid_vol_annual
+
+    # Portfolio variance: start with liquid component
+    var_p = (w_L ** 2) * (σ_L ** 2)
+
+    # Add illiquid own-variance and liquid-illiquid covariance
+    for pos in illiquid_positions:
+        w_i = pos["weight"] / total_weight
+        σ_i = pos["annual_vol"]
+        ρ_iL = pos["rho_equity"]
+
+        var_p += (w_i ** 2) * (σ_i ** 2)
+        var_p += 2 * w_L * w_i * ρ_iL * σ_i * σ_L
+
+    # Add illiquid-illiquid cross-terms (one-factor model)
+    for i in range(len(illiquid_positions)):
+        for j in range(i + 1, len(illiquid_positions)):
+            pos_i = illiquid_positions[i]
+            pos_j = illiquid_positions[j]
+            w_i = pos_i["weight"] / total_weight
+            w_j = pos_j["weight"] / total_weight
+            σ_i = pos_i["annual_vol"]
+            σ_j = pos_j["annual_vol"]
+            # One-factor: ρ_ij ≈ ρ_i * ρ_j
+            ρ_ij = pos_i["rho_equity"] * pos_j["rho_equity"]
+            var_p += 2 * w_i * w_j * ρ_ij * σ_i * σ_j
+
+    adjusted_vol_annual = float(np.sqrt(max(var_p, 0.0)))
+    adjusted_vol_daily = adjusted_vol_annual / np.sqrt(252)
+
+    # ES adjustment: use Student-t if available, otherwise normal approximation
+    if student_t_fit and student_t_fit.get("df", 100) <= 30:
+        df = student_t_fit["df"]
+        q = student_t.ppf(0.975, df)
+        es_factor = ((df + q ** 2) / (df - 1)) * student_t.pdf(q, df) / 0.025
+        adjusted_es_975_1d = adjusted_vol_daily * es_factor
+    else:
+        # Normal approximation: ES_975 ≈ σ * φ(z) / (1-α) where z = Φ⁻¹(0.975)
+        from scipy.stats import norm
+        z = norm.ppf(0.975)
+        adjusted_es_975_1d = adjusted_vol_daily * norm.pdf(z) / 0.025
+
+    return {
+        "overlay_applied": True,
+        "illiquid_weight_pct": total_illiquid_weight / total_weight,
+        "liquid_weight_pct": w_L,
+        "illiquid_positions": illiquid_positions,
+        "unadjusted_vol_annual": σ_L,
+        "adjusted_vol_annual": adjusted_vol_annual,
+        "adjusted_vol_daily": float(adjusted_vol_daily),
+        "adjusted_es_975_1d": float(adjusted_es_975_1d),
+        "method": "student_t_overlay" if (student_t_fit and student_t_fit.get("df", 100) <= 30) else "normal_overlay",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: FX Risk
+# ---------------------------------------------------------------------------
+
+def _identify_fx_exposures(
+    aggregated: dict[str, dict[str, Any]],
+    weights: dict[str, float],
+) -> dict[str, dict[str, Any]]:
+    """Identify non-USD currency exposures and map to yfinance FX pairs."""
+    fx_map: dict[str, dict[str, Any]] = {}  # currency -> {weight, symbols, yf_pair}
+
+    for symbol, payload in aggregated.items():
+        currency = str(payload.get("currency", "USD")).strip().upper()
+        if currency == "USD" or not currency:
+            continue
+        weight = weights.get(symbol, 0.0)
+        if weight <= 0:
+            continue
+
+        if currency not in fx_map:
+            # yfinance convention: USDINR=X quotes INR per 1 USD
+            yf_pair = f"USD{currency}=X"
+            fx_map[currency] = {
+                "currency": currency,
+                "yf_pair": yf_pair,
+                "total_weight": 0.0,
+                "symbols": [],
+            }
+        fx_map[currency]["total_weight"] += weight
+        fx_map[currency]["symbols"].append(symbol)
+
+    return fx_map
+
+
+def _download_fx_returns(
+    fx_pairs: list[str],
+    lookback_days: int,
+) -> tuple[pd.DataFrame | None, str | None]:
+    """Download FX rate return series from yfinance."""
+    if not fx_pairs:
+        return None, None
+    prices, error = _download_prices(fx_pairs, lookback_days)
+    if prices is None:
+        return None, error
+    returns = prices.pct_change().dropna(how="all")
+    returns.columns = [str(c).upper() for c in returns.columns]
+    # Forward-fill up to 3 days for calendar misalignment
+    returns = returns.ffill(limit=3).fillna(0.0)
+    return returns, error
+
+
+def _adjust_returns_for_fx(
+    asset_returns: pd.DataFrame,
+    fx_returns: pd.DataFrame,
+    fx_map: dict[str, dict[str, Any]],
+) -> pd.DataFrame:
+    """Adjust local-currency returns to USD returns.
+
+    Correct formula: r_usd = (1 + r_local) / (1 + r_usdinr) - 1
+    When INR weakens (USDINR rises), USD value of INR assets falls.
+    """
+    adjusted = asset_returns.copy()
+
+    for currency, info in fx_map.items():
+        yf_pair = info["yf_pair"]
+        if yf_pair not in fx_returns.columns:
+            continue
+
+        for symbol in info["symbols"]:
+            if symbol not in adjusted.columns:
+                continue
+
+            # Align dates
+            common_idx = adjusted.index.intersection(fx_returns.index)
+            if len(common_idx) == 0:
+                continue
+
+            local_ret = adjusted.loc[common_idx, symbol]
+            fx_ret = fx_returns.loc[common_idx, yf_pair]
+
+            # r_usd = (1 + r_local) / (1 + r_usdinr) - 1
+            adjusted.loc[common_idx, symbol] = (1 + local_ret) / (1 + fx_ret) - 1
+
+    return adjusted
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Volatility Regime Detection
+# ---------------------------------------------------------------------------
+
+def _detect_vol_regime(
+    returns: pd.Series,
+    short_window: int = 21,
+    long_window: int = 63,
+) -> dict[str, Any]:
+    """Detect volatility regime from return series."""
+    if len(returns) < long_window:
+        return {
+            "current_regime": "insufficient_data",
+            "short_vol": None,
+            "long_vol": None,
+            "vol_ratio": None,
+            "days_in_regime": None,
+        }
+
+    short_vol = float(np.std(returns.values[-short_window:], ddof=1) * np.sqrt(252))
+    long_vol = float(np.std(returns.values[-long_window:], ddof=1) * np.sqrt(252))
+
+    if long_vol <= 0:
+        vol_ratio = 1.0
+    else:
+        vol_ratio = short_vol / long_vol
+
+    if vol_ratio < 0.7:
+        regime = "low"
+    elif vol_ratio <= 1.3:
+        regime = "normal"
+    elif vol_ratio <= 2.0:
+        regime = "elevated"
+    else:
+        regime = "crisis"
+
+    # Estimate days in current regime by scanning backward
+    days_in_regime = 0
+    if len(returns) >= short_window:
+        for i in range(short_window, min(len(returns), long_window * 3)):
+            window = returns.values[-i:]
+            w_vol = float(np.std(window[:short_window], ddof=1) * np.sqrt(252))
+            if long_vol > 0:
+                w_ratio = w_vol / long_vol
+            else:
+                w_ratio = 1.0
+
+            if w_ratio < 0.7:
+                w_regime = "low"
+            elif w_ratio <= 1.3:
+                w_regime = "normal"
+            elif w_ratio <= 2.0:
+                w_regime = "elevated"
+            else:
+                w_regime = "crisis"
+
+            if w_regime == regime:
+                days_in_regime = i
+            else:
+                break
+        if days_in_regime == 0:
+            days_in_regime = short_window
+
+    return {
+        "current_regime": regime,
+        "short_vol": short_vol,
+        "long_vol": long_vol,
+        "vol_ratio": float(vol_ratio),
+        "days_in_regime": days_in_regime,
+    }
+
+
+def _stress_es(returns: pd.Series, short_window: int = 21) -> float | None:
+    """Compute ES from recent short-window returns only."""
+    if len(returns) < short_window:
+        return None
+    recent = returns.values[-short_window:]
+    losses = -recent
+    var_975 = float(np.quantile(losses, 0.975))
+    tail = losses[losses >= var_975]
+    if len(tail) > 0:
+        return float(np.mean(tail))
+    return var_975
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: Concentration Risk Decomposition
+# ---------------------------------------------------------------------------
+
+def _build_covariance_matrix(
+    symbols: list[str],
+    lookback_days: int,
+) -> tuple[np.ndarray | None, list[str], dict[str, Any]]:
+    """Download individual returns and build sample covariance matrix."""
+    prices, error = _download_prices(symbols, lookback_days)
+    if prices is None:
+        return None, symbols, {"error": error, "condition_number": None}
+
+    returns = prices.pct_change().dropna(how="all")
+    returns.columns = [str(c).upper() for c in returns.columns]
+
+    available = [s for s in symbols if s in returns.columns]
+    if len(available) < 2:
+        return None, symbols, {"error": "Need at least 2 symbols for covariance", "condition_number": None}
+
+    # Drop rows with any NaN in the available columns
+    clean = returns[available].dropna()
+    if len(clean) < 30:
+        return None, symbols, {"error": "Insufficient clean observations", "condition_number": None}
+
+    cov = clean.cov().values
+    try:
+        cond = float(np.linalg.cond(cov))
+    except Exception:
+        cond = float("inf")
+
+    quality = {
+        "error": None,
+        "condition_number": cond,
+        "observations": len(clean),
+        "symbols_used": available,
+        "high_condition_warning": cond > 1000,
+    }
+
+    return cov, available, quality
+
+
+def _component_var(
+    weights_arr: np.ndarray,
+    cov_matrix: np.ndarray,
+    confidence: float = 0.975,
+) -> np.ndarray:
+    """Euler decomposition of parametric VaR.
+
+    Component VaR_i = w_i * (Σw)_i / (w'Σw) * VaR_p
+    Sum of component VaRs equals portfolio VaR (exact under elliptical).
+    """
+    from scipy.stats import norm
+    z = norm.ppf(confidence)
+
+    port_var = float(weights_arr @ cov_matrix @ weights_arr)
+    port_vol = np.sqrt(port_var)
+    portfolio_var = z * port_vol
+
+    # Marginal contribution: Σw
+    sigma_w = cov_matrix @ weights_arr
+
+    # Component VaR: w_i * (Σw)_i / (w'Σw) * VaR_p
+    if port_var > 0:
+        component = weights_arr * sigma_w / port_var * portfolio_var
+    else:
+        component = np.zeros_like(weights_arr)
+
+    return component
+
+
+def _marginal_var(
+    weights_arr: np.ndarray,
+    cov_matrix: np.ndarray,
+    confidence: float = 0.975,
+) -> np.ndarray:
+    """Marginal VaR: sensitivity of portfolio VaR to unit weight change.
+
+    mVaR_i = z_α * (Σw)_i / σ_p
+    """
+    from scipy.stats import norm
+    z = norm.ppf(confidence)
+
+    port_var = float(weights_arr @ cov_matrix @ weights_arr)
+    port_vol = np.sqrt(port_var)
+
+    sigma_w = cov_matrix @ weights_arr
+
+    if port_vol > 0:
+        marginal = z * sigma_w / port_vol
+    else:
+        marginal = np.zeros_like(weights_arr)
+
+    return marginal
+
+
+def _vol_weighted_hhi(
+    weights: dict[str, float],
+    volatilities: dict[str, float],
+    portfolio_vol: float,
+) -> float:
+    """HHI_vol = Σ(w_i * σ_i / σ_p)²
+
+    Captures that 10% in a high-vol biotech is riskier than 10% in T-bills.
+    """
+    if portfolio_vol <= 0:
+        return 0.0
+    total = 0.0
+    for symbol, w in weights.items():
+        sigma_i = volatilities.get(symbol, 0.0)
+        risk_share = (w * sigma_i) / portfolio_vol
+        total += risk_share ** 2
+    return float(total)
 
 
 async def _load_scoped_holdings(
@@ -1232,6 +1909,10 @@ async def get_condensed_portfolio_state(
 async def analyze_portfolio_risk(
     lookback_days: int = 252,
     es_limit: float = 0.025,
+    risk_model: str = "auto",
+    illiquid_overrides: list[dict[str, Any]] | None = None,
+    include_fx_risk: bool = True,
+    include_decomposition: bool = False,
     scope_entity: str = "all",
     scope_wrapper: str = "all",
     scope_account_types: list[ScopeAccountType] | None = None,
@@ -1242,6 +1923,8 @@ async def analyze_portfolio_risk(
     """Compute ES/VaR/volatility/max drawdown using Ghostfolio positions and direct market data."""
     lookback_days = max(30, min(int(lookback_days), 1260))
     effective_es_limit, policy_warnings = _normalized_es_limit(es_limit)
+    if risk_model not in ("historical", "student_t", "auto"):
+        risk_model = "auto"
 
     try:
         scoped = await _load_scoped_holdings(
@@ -1256,7 +1939,8 @@ async def analyze_portfolio_risk(
         return {"ok": False, "error": str(exc)}
 
     aggregated = _aggregate_holdings(scoped["holdings"])
-    weights, total_value = _weights_from_aggregated(aggregated)
+    # clip_negatives=False so short positions are visible to risk engine
+    weights, total_value = _weights_from_aggregated(aggregated, clip_negatives=False)
     value_semantics = _portfolio_value_semantics(scoped["holdings"])
 
     if not weights:
@@ -1282,8 +1966,131 @@ async def analyze_portfolio_risk(
             },
         }
 
-    returns, missing_symbols = _download_returns(weights, lookback_days)
-    risk = _risk_metrics(returns, es_limit=effective_es_limit)
+    returns, data_quality = _download_returns(weights, lookback_days)
+
+    # Phase 4: FX risk adjustment
+    fx_exposure_info: dict[str, Any] = {"fx_adjusted": False, "total_non_usd_weight": 0.0}
+    if include_fx_risk:
+        fx_map = _identify_fx_exposures(aggregated, weights)
+        if fx_map:
+            total_non_usd = sum(info["total_weight"] for info in fx_map.values())
+            fx_pairs = [info["yf_pair"] for info in fx_map.values()]
+            fx_returns_df, fx_error = _download_fx_returns(fx_pairs, lookback_days)
+
+            # Compute per-currency FX volatility from downloaded returns
+            fx_vol_by_currency: dict[str, float | None] = {}
+            if fx_returns_df is not None and not fx_returns_df.empty:
+                for cur, info in fx_map.items():
+                    pair = info["yf_pair"]
+                    if pair in fx_returns_df.columns:
+                        fx_series = fx_returns_df[pair].dropna()
+                        if len(fx_series) >= 20:
+                            fx_vol_by_currency[cur] = float(fx_series.std() * np.sqrt(252))
+                        else:
+                            fx_vol_by_currency[cur] = None
+                    else:
+                        fx_vol_by_currency[cur] = None
+
+            fx_exposure_info = {
+                "fx_adjusted": fx_returns_df is not None and not fx_returns_df.empty,
+                "total_non_usd_weight": total_non_usd,
+                "currencies": {
+                    cur: {
+                        "weight": info["total_weight"],
+                        "symbols": info["symbols"],
+                        "yf_pair": info["yf_pair"],
+                        "annualized_vol": fx_vol_by_currency.get(cur),
+                    }
+                    for cur, info in fx_map.items()
+                },
+                "fx_download_error": fx_error,
+            }
+
+            # If we got FX data and have individual asset returns, recompute weighted returns
+            if fx_returns_df is not None and not fx_returns_df.empty:
+                tradeable, _ = _filter_tradeable_symbols(weights)
+                symbols = sorted(tradeable.keys())
+                prices, _ = _download_prices(symbols, lookback_days)
+                if prices is not None and not prices.empty:
+                    asset_returns = prices.pct_change().dropna(how="all")
+                    asset_returns.columns = [str(c).upper() for c in asset_returns.columns]
+                    asset_returns = asset_returns.ffill(limit=3).fillna(0.0)
+
+                    # Apply FX adjustment
+                    adjusted_returns = _adjust_returns_for_fx(asset_returns, fx_returns_df, fx_map)
+
+                    available = [s for s in symbols if s in adjusted_returns.columns]
+                    if available:
+                        avail_sum = sum(tradeable[s] for s in available)
+                        if avail_sum > 0:
+                            norm_w = {s: tradeable[s] / avail_sum for s in available}
+                            weighted_fx = adjusted_returns[available].mul(
+                                pd.Series(norm_w), axis=1,
+                            ).sum(axis=1).tail(lookback_days)
+
+                            if not weighted_fx.empty:
+                                returns = weighted_fx
+                                data_quality["fx_adjusted"] = True
+
+    risk = _risk_metrics_with_model(
+        returns, es_limit=effective_es_limit, data_quality=data_quality, risk_model=risk_model,
+    )
+
+    # Phase 5: Volatility regime detection
+    vol_regime = _detect_vol_regime(returns)
+    if vol_regime.get("current_regime") in ("elevated", "crisis"):
+        stress_es_val = _stress_es(returns)
+        if stress_es_val is not None:
+            risk["stress_es_975_1d"] = stress_es_val
+
+    # Phase 6: Risk decomposition (optional, adds latency)
+    risk_decomposition = None
+    if include_decomposition and not returns.empty:
+        tradeable_dec, _ = _filter_tradeable_symbols(weights)
+        dec_symbols = sorted(tradeable_dec.keys())
+        if len(dec_symbols) >= 2:
+            cov_matrix, cov_symbols, cov_quality = _build_covariance_matrix(dec_symbols, lookback_days)
+            if cov_matrix is not None:
+                # Build weight array aligned with cov_symbols
+                total_w = sum(tradeable_dec.get(s, 0.0) for s in cov_symbols)
+                if total_w > 0:
+                    w_arr = np.array([tradeable_dec.get(s, 0.0) / total_w for s in cov_symbols])
+                    comp_var = _component_var(w_arr, cov_matrix, confidence=0.975)
+                    marg_var = _marginal_var(w_arr, cov_matrix, confidence=0.975)
+
+                    # Individual volatilities for vol-weighted HHI
+                    individual_vols = {}
+                    for i, s in enumerate(cov_symbols):
+                        individual_vols[s] = float(np.sqrt(cov_matrix[i, i] * 252))
+
+                    port_vol_daily = float(np.sqrt(w_arr @ cov_matrix @ w_arr))
+                    port_vol_annual = port_vol_daily * np.sqrt(252)
+
+                    dec_weights = {s: w_arr[i] for i, s in enumerate(cov_symbols)}
+                    vw_hhi = _vol_weighted_hhi(dec_weights, individual_vols, port_vol_annual)
+
+                    # Build component VaR table sorted by absolute contribution
+                    comp_table = sorted(
+                        [
+                            {
+                                "symbol": cov_symbols[i],
+                                "weight": float(w_arr[i]),
+                                "component_var_975": float(comp_var[i]),
+                                "marginal_var_975": float(marg_var[i]),
+                                "pct_contribution": float(comp_var[i] / sum(comp_var)) if sum(comp_var) > 0 else 0.0,
+                            }
+                            for i in range(len(cov_symbols))
+                        ],
+                        key=lambda x: abs(x["component_var_975"]),
+                        reverse=True,
+                    )
+
+                    risk_decomposition = {
+                        "component_var_975": comp_table,
+                        "parametric_portfolio_var_975": float(sum(comp_var)),
+                        "vol_weighted_hhi": vw_hhi,
+                        "covariance_quality": cov_quality,
+                    }
 
     concentration = sorted(
         (
@@ -1305,10 +2112,64 @@ async def analyze_portfolio_risk(
         alerts.append(
             "RISK ALERT LEVEL 3 (CRITICAL): ES(97.5%) exceeds 2.5% binding limit; strongly discourage new trades."
         )
+    elif risk.get("status") == "unreliable":
+        risk_alert_level = 2
+        alerts.append(
+            "RISK ALERT LEVEL 2 (UNRELIABLE): Risk metrics cover less than 50% of portfolio weight. "
+            "Tail risk is likely severely understated."
+        )
     if concentration and concentration[0]["weight"] > 0.10:
         alerts.append(
             f"Single-name concentration alert: {concentration[0]['symbol']} at {concentration[0]['weight']:.2%}."
         )
+
+    # Phase 5: Regime alerts
+    if vol_regime.get("current_regime") == "crisis":
+        alerts.append(
+            f"VOLATILITY REGIME: Crisis detected — short-term vol ({vol_regime['short_vol']:.1%}) "
+            f"is {vol_regime['vol_ratio']:.1f}x long-term vol ({vol_regime['long_vol']:.1%})."
+        )
+    elif vol_regime.get("current_regime") == "elevated":
+        alerts.append(
+            f"Elevated volatility regime: vol ratio {vol_regime['vol_ratio']:.2f}."
+        )
+
+    # Illiquid overlay
+    illiquid_overlay = {"overlay_applied": False}
+    if illiquid_overrides:
+        liquid_vol = risk.get("annualized_volatility", 0.0)
+        liquid_weight_pct = data_quality.get("weight_coverage_pct", 1.0)
+        illiquid_overlay = _compute_illiquid_overlay(
+            illiquid_overrides=illiquid_overrides,
+            liquid_vol_annual=liquid_vol,
+            liquid_weight=liquid_weight_pct,
+            student_t_fit=risk.get("student_t_fit"),
+        )
+        if illiquid_overlay.get("overlay_applied"):
+            adjusted_es = illiquid_overlay.get("adjusted_es_975_1d")
+            if adjusted_es is not None and adjusted_es > effective_es_limit:
+                risk["status"] = "critical"
+                if risk_alert_level < 3:
+                    risk_alert_level = 3
+                    alerts.append(
+                        f"RISK ALERT LEVEL 3 (CRITICAL): Adjusted ES(97.5%) with illiquid overlay "
+                        f"({adjusted_es:.4f}) exceeds {effective_es_limit:.4f} binding limit."
+                    )
+            # Valuation staleness alerts
+            for pos in illiquid_overlay.get("illiquid_positions", []):
+                staleness = pos.get("mark_staleness")
+                age = pos.get("valuation_age_days")
+                sym = pos.get("symbol", "UNKNOWN")
+                if staleness == "very_stale_mark":
+                    alerts.append(
+                        f"Illiquid position {sym} valued {age} days ago "
+                        f"— mark uncertainty significantly increases risk estimate."
+                    )
+                elif staleness == "stale_mark":
+                    # Lower severity: warning appended to overlay, not top-level alert
+                    illiquid_overlay.setdefault("warnings", []).append(
+                        f"Position {sym} valuation is {age} days old — consider reappraisal."
+                    )
 
     return {
         "ok": True,
@@ -1331,12 +2192,26 @@ async def analyze_portfolio_risk(
             },
         },
         "risk": risk,
+        "vol_regime": vol_regime,
+        "fx_exposure": fx_exposure_info,
+        "risk_decomposition": risk_decomposition,
         "risk_alert_level": risk_alert_level,
         "alerts": alerts,
+        "illiquid_overlay": illiquid_overlay,
+        "risk_data_integrity": {
+            "weight_coverage_pct": data_quality.get("weight_coverage_pct", 0.0),
+            "available_symbols": data_quality.get("available_symbols", []),
+            "missing_symbols": data_quality.get("missing_symbols", []),
+            "excluded_symbols": data_quality.get("excluded_symbols", []),
+            "renormalized": data_quality.get("renormalized", False),
+            "nan_fill_symbols": data_quality.get("nan_fill_symbols", []),
+            "yfinance_error": data_quality.get("yfinance_error"),
+            "data_quality_warnings": data_quality.get("data_quality_warnings", []),
+        },
         "data_quality": {
-            "returns_observations": int(len(returns)),
+            "returns_observations": data_quality.get("observations", int(len(returns))),
             "lookback_days_requested": lookback_days,
-            "missing_market_data_symbols": missing_symbols,
+            "missing_market_data_symbols": data_quality.get("missing_symbols", []),
         },
         "provenance": {
             **scoped.get("provenance", {}),
@@ -1398,7 +2273,8 @@ async def get_portfolio_return_series(
             "provenance": scoped.get("provenance", {}),
         }
 
-    returns, missing_symbols = _download_returns(weights, lookback_days)
+    returns, data_quality = _download_returns(weights, lookback_days)
+    missing_symbols = data_quality.get("missing_symbols", [])
     if returns.empty:
         return {
             "ok": True,
@@ -1463,7 +2339,7 @@ async def get_portfolio_return_series(
         },
         "series": rows,
         "data_quality": {
-            "returns_observations": int(len(returns)),
+            "returns_observations": data_quality.get("observations", int(len(returns))),
             "lookback_days_requested": lookback_days,
             "missing_market_data_symbols": missing_symbols,
         },

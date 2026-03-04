@@ -16,7 +16,7 @@ Produce a decision-grade valuation range for private or illiquid assets.
 - Holdings context: `ghostfolio.account`, `ghostfolio.portfolio`
 - Comp and disclosure context: `sec-edgar.sec_edgar_company`, `sec-edgar.sec_edgar_financial`, `sec-edgar.sec_edgar_filing`
 - Macro/rates context: `market-intel-direct.get_market_snapshot`, `market-intel-direct.get_fred_series`
-- Tax impact context: `household-tax.compare_tax_scenarios`
+- Tax impact context: `household-tax.compare_scenarios`
 - Policy context where material: `policy-events.get_federal_rules`
 
 ## Workflow

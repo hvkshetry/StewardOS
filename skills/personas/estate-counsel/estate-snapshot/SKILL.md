@@ -19,6 +19,19 @@ Follow the `estate-overview` skill in full:
 5. **Net Worth**: `get_net_worth` — by jurisdiction and currency
 6. **Critical Dates**: `get_upcoming_dates(days=90)` — filing deadlines, renewals, reviews
 7. **Document Gaps**: Identify entities/assets missing linked documents
+8. **Optional Finance Deep Dive**: use `finance-graph` valuation-history tools when trend context is needed beyond current snapshot values
+
+## Routing Guardrails
+
+- Use `estate-planning` as the default source for entity/ownership/net-worth snapshot reporting.
+- Use `finance-graph` only for valuation history or statement-fact drill-downs.
+- If tax-impact analysis is requested, switch to `household-tax` tools; do not infer tax scenarios from `finance-graph` alone.
+
+## Output Contract
+
+- Include explicit as-of date for all snapshot values
+- Separate snapshot facts from advisory inferences
+- Append provenance by section (`estate-planning`, optional `finance-graph`, optional `household-tax`)
 
 Present the full snapshot in the format defined in the `estate-overview` skill.
 Flag any anomalies: dissolved entities still owning assets, missing tax IDs, overdue dates.
