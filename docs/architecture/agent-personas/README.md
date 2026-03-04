@@ -14,16 +14,22 @@ Personas solve that by separating:
 
 ## What is currently configured
 
-Current persona roster:
+### Persona summary
 
-- Chief of Staff
-- Estate Counsel
-- Household Comptroller
-- Household Director
-- Investment Officer
-- Wellness Advisor
+| Persona | Skills | Key MCP Servers | Contract |
+|---------|--------|-----------------|----------|
+| **Investment Officer** | 16 | portfolio-analytics, market-intel-direct, ghostfolio, policy-events, sec-edgar, household-tax, finance-graph | [`AGENTS.md`](../../../agent-configs/investment-officer/AGENTS.md) |
+| **Chief of Staff** | 8 | paperless, memos, google-workspace | [`AGENTS.md`](../../../agent-configs/chief-of-staff/AGENTS.md) |
+| **Estate Counsel** | 7 | estate-planning, finance-graph, paperless | [`AGENTS.md`](../../../agent-configs/estate-counsel/AGENTS.md) |
+| **Household Director** | 7 | mealie, grocy, family-edu, homebox | [`AGENTS.md`](../../../agent-configs/household-director/AGENTS.md) |
+| **Household Comptroller** | 6 | actual, finance-graph, household-tax, ghostfolio, estate-planning | [`AGENTS.md`](../../../agent-configs/household-comptroller/AGENTS.md) |
+| **Wellness Advisor** | 6 | wger, health-records, oura, apple-health | [`AGENTS.md`](../../../agent-configs/wellness-advisor/AGENTS.md) |
 
 Each persona has a contract under `agent-configs/<persona>/AGENTS.md`, plus sanitized templates in `AGENTS.example.md` and `.codex/config.toml.example`.
+
+### Domain ownership
+
+Each persona's authoritative domain, MCP access (read vs write), escalation rules, and boundaries are defined in its [`AGENTS.md`](../../../agent-configs/) contract. See the individual contracts linked in the table above for the precise specification.
 
 ## Persona boundary model
 
@@ -34,38 +40,29 @@ Each persona has a contract under `agent-configs/<persona>/AGENTS.md`, plus sani
 - Outbound automation uses agent mailbox aliases (persona-specific `from_email` values).
 - Tool-first operation with explicit provenance expectations.
 
-### Domain ownership (current operating model)
+### Email identity routing
 
-- Comptroller: canonical owner of household budget, monthly close, and tax-operating workflows.
-- Investment Officer: portfolio/risk/research workflows with binding risk guardrails.
-- Estate Counsel: entity/ownership/legal-operational graph and document-linked estate workflows.
-- Household Director: meal, pantry, education planning, and household logistics.
-- Wellness Advisor: sleep/activity/workout/medical-record aggregation and wellness trend analysis.
-- Chief of Staff: triage, routing, briefs, and cross-domain coordination.
+Each persona uses a dedicated email alias for outbound communication (e.g., `investment-officer@<domain>`, `comptroller@<domain>`). The alias is configured in the persona's `config.toml` as the `from_email` value. This ensures audit trails show which persona generated each outbound message.
 
-## How personas participate in workflows
+### Escalation decision points
 
-### 1. Inbound family-office mail
+Escalation is directional — each persona knows exactly which persona to hand off to and under what conditions:
 
-1. Ingress receives Gmail Pub/Sub push.
-2. Worker resolves alias to persona contract.
-3. Persona executes within its tool and scope boundaries.
-4. Reply is sent with persona identity and structured completion contract.
+- **Investment Officer → Household Comptroller**: any decision with material tax impact (Roth conversion, large capital gain realization, estimated payment changes).
+- **Investment Officer → Estate Counsel**: any trade affecting entity-owned or trust-held positions.
+- **Household Comptroller → Estate Counsel**: entity restructuring with tax implications.
+- **Household Comptroller → Investment Officer**: portfolio-level trade decisions or risk analysis needs.
+- **Estate Counsel → Household Comptroller**: estate changes with tax implications (entity dissolution, ownership transfer).
+- **Estate Counsel → Investment Officer**: estate changes affecting portfolio-held assets.
+- **Household Director → Wellness Advisor**: health-related concerns surfaced during activity or meal planning.
+- **Household Director → Chief of Staff**: cross-domain coordination, calendar conflicts.
+- **Wellness Advisor → Household Director**: nutrition findings that should influence meal planning.
+- **Wellness Advisor → Chief of Staff**: health concerns requiring appointment scheduling.
+- **Chief of Staff → specific persona**: any domain-specific decision routes to the owning persona.
 
-### 2. Cross-domain decision flow
+## Workflows
 
-Example: proposed large portfolio rebalance with tax implications.
-
-1. Investment Officer runs strategy and risk analysis.
-2. Household Comptroller validates household tax/cashflow impact.
-3. Estate Counsel is engaged only if entity/ownership effects are present.
-4. Chief of Staff can synthesize final action brief for execution.
-
-### 3. Household operations weekly plan
-
-1. Household Director produces plan (meals, pantry, activities).
-2. Wellness Advisor adds recovery/fitness context.
-3. Chief of Staff packages summary for calendar and communication cadence.
+See [README.md](../../../README.md#what-this-system-actually-does) for end-to-end workflow examples showing how personas compose with skills and MCP tools.
 
 ## Customization and extension
 

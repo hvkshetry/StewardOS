@@ -28,6 +28,8 @@ StewardOS currently uses a mixed server model:
 | `policy-events` | `get_recent_bills`, `get_federal_rules`, `get_upcoming_hearings`, `get_bill_details`, `get_rule_details`, `get_hearing_details` | Congressional bills, Federal Register rules, committee hearings (two-stage sieve pattern) |
 | `ghostfolio-mcp` | `portfolio`, `account`, `order`, `market`, `reference`, `system` | Consolidated portfolio state, accounts, activities, market data from Ghostfolio |
 
+> **Note on `ghostfolio-mcp`**: This server uses consolidated operation patterns (e.g., `portfolio(operation="summary")`, `account(operation="list")`) rather than one-tool-per-function. Each top-level tool dispatches to sub-operations via an `operation` parameter.
+
 #### Estate & Finance
 
 | Server | Key Tools | Description |
@@ -66,6 +68,35 @@ The lockfile currently pins:
 
 Each entry includes remote/upstream URLs, checkout path, and exact commit SHA.
 
+> **Note on `sec-edgar`**: The `sec-edgar` server used in the investing-workspace is the same codebase as the upstream `sec-edgar-mcp` fork, pinned via `upstreams.lock.yaml`. It is not a separate server.
+
+### Persona access matrix
+
+Each persona's AGENTS.md contract defines its MCP server access. The matrix below summarizes read/write authority across all 6 personas and 20 servers.
+
+| Server | Investment Officer | Comptroller | Estate Counsel | Director | Wellness Advisor | Chief of Staff |
+|--------|-------------------|-------------|----------------|----------|-----------------|----------------|
+| portfolio-analytics | **read-write** | — | — | — | — | — |
+| market-intel-direct | read-only | — | — | — | — | — |
+| ghostfolio | **read-write** | read-only | — | — | — | — |
+| policy-events | read-only | — | — | — | — | — |
+| sec-edgar | read-only | — | — | — | — | — |
+| household-tax | read-only | **read-write** | — | — | — | — |
+| finance-graph | read-only | **read-write** | read-only | — | — | — |
+| estate-planning | — | read-only | **read-write** | — | — | — |
+| actual | — | **read-write** | — | — | — | — |
+| paperless | — | — | **read-write** | — | — | **read-write** |
+| mealie | — | — | — | **read-write** | — | — |
+| grocy | — | — | — | **read-write** | — | — |
+| family-edu | — | — | — | **read-write** | — | — |
+| homebox | — | — | — | **read-write** | — | — |
+| wger | — | — | — | — | **read-write** | — |
+| health-records | — | — | — | — | **read-write** | — |
+| oura | — | — | — | — | read-only | — |
+| apple-health | — | — | — | — | read-only | — |
+| memos | — | — | — | — | — | **read-write** |
+| google-workspace | — | — | — | — | — | read-only |
+
 ## Dependency governance and reproducibility
 
 ### Source of truth
@@ -84,25 +115,9 @@ Each entry includes remote/upstream URLs, checkout path, and exact commit SHA.
 3. Pin exact commit SHA in the lockfile.
 4. Prefer upstreaming generic improvements to reduce long-term fork maintenance.
 
-## How this layer participates in workflows
+## Workflows
 
-### 1. Investment workflow
-
-1. `ghostfolio` and portfolio tools provide holdings/risk context.
-2. `policy-events` and `sec-edgar` provide policy/disclosure context.
-3. Persona composes recommendations with explicit provenance to tool calls.
-
-### 2. Estate workflow
-
-1. Estate counsel queries ownership/entity graph via estate servers.
-2. Paperless tools provide document evidence and IDs.
-3. Finance graph data can be referenced without leaking write authority across roles.
-
-### 3. Household operations workflow
-
-1. Mealie and Grocy tools support plan + pantry reconciliation.
-2. Wellness tools combine Oura/Apple Health/wger context.
-3. Chief-of-staff and household personas route outputs through shared formatting skills.
+See [README.md](../../../README.md#what-this-system-actually-does) for end-to-end workflow examples showing how MCP tools compose with personas and skills.
 
 ## Customization and extension
 

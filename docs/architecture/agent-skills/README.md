@@ -10,43 +10,13 @@ StewardOS is designed for recurring household/family-office operations, not one-
 - They reduce behavioral drift across runs and across contributors.
 - They create contribution points for domain experts (nutrition, investing, tax, legal operations, household ops).
 
-## What is currently configured
+## Skill source layers
 
-Skills are stored under `skills/` and currently include:
-
-### Core shared skills
-
-- `budgeting`
-- `document-management`
-- `family-email-formatting`
-- `investing`
-
-### Shared cross-persona support skills
-
-- `skills/shared/search`
-- `skills/shared/search-strategy`
-- `skills/shared/README.md`
-
-### Persona skill packs
-
-Persona-specific skills are now tracked in:
-
-Household Director persona skills include `meal-planning` and `child-development`.
-
-- `skills/personas/chief-of-staff/*`
-- `skills/personas/estate-counsel/*`
-- `skills/personas/household-comptroller/*`
-- `skills/personas/household-director/*`
-- `skills/personas/investment-officer/*`
-- `skills/personas/wellness-advisor/*`
-
-## Skill source layers (full ecosystem)
-
-StewardOS uses a layered skill model in real deployments. The public repo only tracks layer 1 directly.
+StewardOS uses a layered skill model. The public repo tracks layers 1 and 3 directly.
 
 ### Layer 1: Repository-tracked portable skills (public, versioned)
 
-- Location: `skills/`
+- Location: `skills/personas/<persona>/` and `skills/shared/`
 - Purpose: portable OSS baseline that contributors can review and improve.
 - Tracked in git and documented in this repository.
 
@@ -71,6 +41,102 @@ Global Codex skills are often installed as symlinks to plugin-managed skill pack
 
 These are environment-level capabilities and are intentionally not vendored into this repository.
 
+## Skill composition model
+
+Skills call MCP tools directly — they do not chain other skills. A skill is a self-contained workflow that maps trigger conditions to a sequence of tool calls, output formatting, and escalation rules. If two skills need the same data, each one calls the relevant MCP tool independently.
+
+## What is currently configured — skill inventory (50 skills)
+
+### Investment Officer (16 skills)
+
+| Skill | Trigger | Description |
+|-------|---------|-------------|
+| `portfolio-review` | `/portfolio-review` | Full diagnostic: positions, risk (Student-t ES, illiquid overlay, vol regime), drift, TLH, recommendations |
+| `rebalance` | `/rebalance` | ES-constrained rebalancing with tax-loss harvesting overlay and gate validation |
+| `morning-briefing` | `/morning-briefing` | Overnight market developments, policy signals, portfolio impact assessment |
+| `market-briefing` | backend | Daily/weekly market context with macro indicators and sector analysis |
+| `tax-loss-harvesting` | backend | TLH candidate identification with wash sale controls and replacement suggestions |
+| `risk-model-config` | backend | Assembles illiquid overrides from finance-graph metadata for risk calculations |
+| `dcf-model` | backend | Discounted cash flow valuation with sensitivity analysis |
+| `comps-analysis` | backend | Comparable company analysis with peer multiples |
+| `dd-checklist` | backend | Due diligence framework for new investment evaluation |
+| `returns-analysis` | backend | IRR and MOIC sensitivity ranges for private investments |
+| `client-report` | backend | Formatted client-facing portfolio report |
+| `portfolio-monitoring` | backend | Ongoing illiquid/private position tracking and alert generation |
+| `illiquid-valuation` | backend | Multi-method private/illiquid position valuation (comps, DCF, returns, unit-economics) |
+| `unit-economics` | backend | Customer and product-level economics analysis (LTV/CAC, margin, retention) |
+| `investment-proposal` | backend | Tax-aware investment thesis documentation |
+| `value-creation-plan` | backend | 12-24 month value creation roadmap for private holdings |
+
+### Chief of Staff (8 skills)
+
+| Skill | Trigger | Description |
+|-------|---------|-------------|
+| `start` | `/start` | Daily briefing: email triage, calendar overview, expiring documents, pending alerts |
+| `weekly-review` | `/weekly-review` | Aggregates tasks, documents, household status, budget alerts, and deadlines across all personas |
+| `task-management` | backend | Task lifecycle management and follow-up tracking |
+| `document-filing` | backend | Paperless-ngx document filing with tagging taxonomy and retention policies |
+| `file-documents` | backend | Batch-file incoming documents with proper tags, correspondents, types, and titles |
+| `paperless-canonical-ingestion` | backend | Cross-source ingestion: discover → deduplicate → classify → tag → upsert into Paperless |
+| `memory-management` | backend | Two-tier persistent context storage for cross-session continuity |
+| `household-admin` | backend | Homebox inventory management, maintenance scheduling, and household notes |
+
+### Estate Counsel (7 skills)
+
+| Skill | Trigger | Description |
+|-------|---------|-------------|
+| `estate-overview` | `/estate-overview` | Family ownership map with entity hierarchies, net worth by jurisdiction, and upcoming critical dates |
+| `compliance-check` | backend | Audit entity compliance status, identify overdue filings, and flag upcoming deadlines |
+| `succession-planning` | backend | Beneficiary review, distribution schedules, trust termination, and cross-border succession |
+| `entity-compliance` | backend | State-specific compliance rules and filing requirements by entity type |
+| `document-generation` | backend | Estate document creation using python-docx/Jinja2 templates, uploaded to Paperless |
+| `contract-review` | backend | Contract analysis with obligation extraction and key date identification |
+| `estate-snapshot` | backend | Point-in-time estate status for reporting or review |
+
+### Household Director (7 skills)
+
+| Skill | Trigger | Description |
+|-------|---------|-------------|
+| `plan-week` | `/plan-week` | Integrates meal plans, pantry state, child activities, and calendar into one weekly operational plan |
+| `meal-planning` | backend | Recipe selection and weekly meal plan assembly using Mealie |
+| `grocery-management` | backend | Shopping list generation from meal plans + pantry shortfalls via Grocy |
+| `grocery-check` | backend | Pantry inventory monitoring — expiring items, low stock, consumption tracking |
+| `activity-plan` | backend | Age-appropriate activity planning with developmental milestone context |
+| `child-development` | backend | Learner profile tracking, evidence pipeline, milestone observations, term briefs |
+| `household-documents` | backend | Household document filing — receipts, warranties, maintenance records, vehicle docs |
+
+### Household Comptroller (6 skills)
+
+| Skill | Trigger | Description |
+|-------|---------|-------------|
+| `monthly-close` | `/monthly-close` | Reconcile Actual + Ghostfolio + finance graph, persist P&L/BS/CFS line items, flag exceptions |
+| `quarterly-tax` | backend | Quarterly tax analysis with estimated payment calculations and TLH coordination |
+| `budget-review` | backend | Budget vs actual variance analysis with anomaly detection |
+| `net-worth-report` | backend | Multi-entity net worth aggregation with liability-adjusted totals |
+| `cash-forecast` | backend | Cash flow projections for 30/60/90-day horizons using recurring patterns and obligations |
+| `financial-planning` | backend | Multi-period financial planning with household-tax v2 scenario modeling |
+
+### Wellness Advisor (6 skills)
+
+| Skill | Trigger | Description |
+|-------|---------|-------------|
+| `morning-check` | `/morning-check` | Synthesizes overnight sleep data, readiness score, and workout schedule into recovery recommendations |
+| `health-dashboard` | backend | Overall health metrics aggregation across Oura, Apple Health, wger, and health-records |
+| `weekly-health` | backend | Weekly health review correlating sleep, activity, nutrition, and body composition |
+| `workout-planning` | backend | Exercise programming based on recovery status and training goals |
+| `nutrition-tracking` | backend | Dietary tracking and macro analysis against nutrition plan targets |
+| `medical-records` | backend | Health document management, provider tracking, and prescription monitoring |
+
+## Skill contract
+
+Each skill explicitly encodes:
+
+- **Trigger conditions**: when the skill activates (user-invocable command or backend context match).
+- **Tool mapping**: which MCP servers/tools are authoritative for each subtask.
+- **Execution flow**: ordered steps for deterministic behavior.
+- **Output format**: expected result structure and reporting shape.
+- **Risk boundaries**: what to escalate, what not to do, and where to hand off.
+
 ## Current symlink status
 
 Based on the current reference deployment:
@@ -83,46 +149,18 @@ Runtime linking from tracked sources is bootstrapped with:
 
 - `scripts/bootstrap_persona_skills.sh`
 
-## Skill contract in StewardOS
+## Workflows
 
-Each skill should explicitly encode:
-
-- Trigger conditions: when the skill is required.
-- Tool mapping: which MCP servers/tools are authoritative for each subtask.
-- Execution flow: ordered steps for deterministic behavior.
-- Output format: expected result structure and reporting shape.
-- Risk boundaries: what to escalate, what not to do, and where to hand off.
-
-## How skills participate in workflows
-
-### 1. Household comptroller monthly close
-
-1. Persona invokes budgeting and finance-oriented skill flows.
-2. MCP data is pulled from Actual, Ghostfolio, and finance graph tools.
-3. Output is emitted with variance analysis, constraints, and actionable follow-ups.
-
-### 2. Family communications automation
-
-1. Worker routes incoming message to persona.
-2. Persona loads `family-email-formatting`.
-3. Response is rendered as executive summary + deep dive + provenance.
-4. Outbound send uses persona alias and structured completion JSON.
-
-### 3. Director weekly operations loop
-
-1. `meal-planning` builds week plan.
-2. Pantry state from Grocy modifies shopping output.
-3. `child-development` adds age-appropriate activity plan.
-4. Combined digest is delivered in a consistent family-office format.
+See [README.md](../../../README.md#what-this-system-actually-does) for end-to-end workflow examples showing how skills, personas, and MCP tools compose.
 
 ## Customization and extension
 
 ### Add a new skill
 
-1. Create `skills/<new-skill>/SKILL.md`.
+1. Create `skills/personas/<persona>/<new-skill>/SKILL.md`.
 2. Document trigger conditions, tool map, workflow steps, and boundaries.
 3. Add examples with realistic inputs/outputs.
-4. Reference the skill in relevant persona `AGENTS.md` contracts.
+4. Reference the skill in the relevant persona [`AGENTS.md`](../../../agent-configs/) contract.
 5. Update docs if the skill changes architecture assumptions.
 
 ### Add a symlinked shared skill
@@ -138,19 +176,7 @@ Each skill should explicitly encode:
 2. Call out behavior changes in PR notes and examples.
 3. Validate that the updated skill still respects persona authority boundaries.
 
-## Community contribution model
-
-StewardOS explicitly invites expert contributions to skill logic:
-
-- Nutrition and fitness professionals for wellness workflows.
-- Investment professionals for portfolio and risk playbooks.
-- CPAs/bookkeepers for comptroller controls and tax procedures.
-- Estate/legal operations professionals for document/entity workflows.
-
-Contribution entry points:
-
-- [Skill Contribution Guide](../../community/skill-contribution-guide.md)
-- [CONTRIBUTING.md](../../../CONTRIBUTING.md)
+For contribution guidelines, see the [Skill Contribution Guide](../../community/skill-contribution-guide.md) and [CONTRIBUTING.md](../../../CONTRIBUTING.md).
 
 ## Boundaries
 

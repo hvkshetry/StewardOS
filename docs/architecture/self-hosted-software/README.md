@@ -16,26 +16,43 @@ Without this layer, personas can still generate text, but they cannot reliably r
 
 Compose currently provisions a loopback-first stack with explicit healthchecks, resource limits, and env-driven secrets via [`services/.env.example`](../../../services/.env.example).
 
-### Core infrastructure
+### Tier 1: Core Infrastructure
 
-- `personal-db` (PostgreSQL 16): shared data plane for Paperless, Ghostfolio, wger, Directus, n8n, and graph services.
-- `personal-redis` (Redis 7): cache/queue backend for Paperless, Ghostfolio, wger.
+Shared data plane services that other applications depend on.
 
-### Application services
+| Service | Image | Dependents | Description |
+|---------|-------|------------|-------------|
+| `personal-db` | PostgreSQL 16 | Paperless-ngx, Ghostfolio, wger, Directus, n8n, estate-planning-mcp, finance-graph-mcp, household-tax-mcp | Shared relational database for all stateful services |
+| `personal-redis` | Redis 7 | Paperless-ngx, Ghostfolio, wger | Cache/queue backend |
 
-- `vaultwarden`: credential vault.
-- `paperless-ngx`: document ingestion, OCR, tagging, retrieval.
-- `ghostfolio`: portfolio tracking and holdings context.
-- `mealie`: recipes and weekly meal planning.
-- `actual-budget`: household budgeting and transaction ledger.
-- `memos`: quick capture, household notes, lightweight decision logs.
-- `homebox`: household asset/inventory tracking.
-- `changedetection`: website and page change monitoring.
-- `grocy`: pantry and consumable inventory.
-- `wger-web` + celery + nginx: fitness and nutrition tracking.
-- `directus`: UI/API surface over estate graph schema.
-- `n8n`: automation workflows between services.
-- `watchtower`: optional rolling container image update automation.
+### Tier 2: Application Services
+
+Domain-specific applications that serve as systems of record, each exposed to personas through MCP servers.
+
+| Service | Image | Depends On | MCP Server | Description |
+|---------|-------|------------|------------|-------------|
+| `paperless-ngx` | Paperless-ngx 2.20 | PostgreSQL, Redis | `paperless-mcp`, `health-records-mcp` | Document ingestion, OCR, tagging, retrieval |
+| `ghostfolio` | Ghostfolio 2.243 | PostgreSQL, Redis | `ghostfolio-mcp`, `portfolio-analytics` | Portfolio tracking and holdings context |
+| `actual-budget` | Actual Server 26.2 | — | `actual-mcp` | Household budgeting and transaction ledger |
+| `mealie` | Mealie v3.11 | — | `mealie-mcp-server` | Recipes and weekly meal planning |
+| `grocy` | Grocy 4.5 | — | `grocy-mcp` | Pantry and consumable inventory |
+| `wger-web` + celery + nginx | wger 2.3-dev | PostgreSQL, Redis | `wger-mcp` | Fitness and nutrition tracking |
+| `homebox` | Homebox 0.23 | — | `homebox-mcp` | Household asset/inventory tracking |
+| `memos` | Memos 0.26 | — | `memos-mcp` | Quick capture, household notes, decision logs |
+| `directus` | Directus (latest) | PostgreSQL | — | Visual editor for estate-planning PostgreSQL schema |
+
+> **Note on Directus**: Directus provides a UI/API surface over the `estate_planning` database schema for visual editing and review. It is not required for MCP tool access — `estate-planning-mcp` connects to PostgreSQL directly. Directus is a convenience layer for human operators.
+
+### Tier 3: Support Services
+
+Infrastructure utilities that are not systems of record.
+
+| Service | Image | Description |
+|---------|-------|-------------|
+| `vaultwarden` | Vaultwarden 1.35 | Credential vault |
+| `changedetection` | changedetection.io 0.54 | Website and page change monitoring |
+| `n8n` | n8n (latest) | Automation workflows between services (depends on PostgreSQL) |
+| `watchtower` | Watchtower (latest) | Optional rolling container image update automation |
 
 ### Contracted files in this repository
 
@@ -45,26 +62,9 @@ Compose currently provisions a loopback-first stack with explicit healthchecks, 
 - [`services/wger/nginx.conf`](../../../services/wger/nginx.conf)
 - [`services/cloudflared/config.yml.template`](../../../services/cloudflared/config.yml.template)
 
-## How this layer participates in workflows
+## Workflows
 
-### 1. Monthly household close (Comptroller)
-
-1. `actual-budget` provides transaction/cashflow truth.
-2. `ghostfolio` provides portfolio and dividend context.
-3. `personal-db` persists consolidated statement facts through finance MCP tools.
-4. Persona output becomes a reconciled monthly summary with provenance.
-
-### 2. Estate documentation lifecycle (Estate Counsel)
-
-1. Legal/estate docs are ingested in `paperless-ngx`.
-2. Estate graph metadata is updated through MCP servers backed by `personal-db`.
-3. `directus` exposes editable/visual review of entity and ownership records.
-
-### 3. Household operations planning (Director + Wellness)
-
-1. `mealie` provides meal plans and shopping context.
-2. `grocy` and `homebox` provide pantry/inventory constraints.
-3. `wger` + health MCP flows provide fitness and wellness continuity.
+See [README.md](../../../README.md#what-this-system-actually-does) for end-to-end workflow examples showing how self-hosted services participate in persona workflows through MCP servers.
 
 ## Customization and extension
 
