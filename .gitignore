@@ -67,7 +67,6 @@ agent-configs/.env.google-oauth
 
 # Persona runtime outputs
 agent-configs/**/output/
-agent-configs/*/AGENTS.md
 
 # Live env/config state
 agents/**/.env

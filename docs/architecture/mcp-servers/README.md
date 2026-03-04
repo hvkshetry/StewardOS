@@ -19,10 +19,38 @@ StewardOS currently uses a mixed server model:
 
 ### First-party server coverage (currently in repo)
 
-- Estate and planning: `estate-graph-mcp`, `estate-planning-mcp`
-- Finance and tax: `finance-graph-mcp`, `household-tax-mcp`
-- Investment and portfolio domain: `investing-workspace`, `ghostfolio-mcp`
-- Household and wellness domain: `health-records-mcp`, `wger-mcp`, `grocy-mcp`, `homebox-mcp`, `memos-mcp`, `family-edu-mcp`
+#### Investment & Portfolio
+
+| Server | Key Tools | Description |
+|--------|-----------|-------------|
+| `portfolio-analytics` | `analyze_portfolio_risk`, `get_condensed_portfolio_state`, `find_tax_loss_harvesting_candidates`, `analyze_allocation_drift`, `get_portfolio_return_series` | Risk modeling (Student-t ES, illiquid overlay, FX risk), portfolio state, TLH candidates, drift analysis |
+| `market-intel-direct` | `get_market_snapshot`, `get_symbol_history`, `get_multi_asset_history`, `get_macro_context_panel`, `search_market_news`, `get_cftc_cot_snapshot` | Real-time market data, historical prices, FRED macro indicators, CFTC positioning, news search |
+| `policy-events` | `get_recent_bills`, `get_federal_rules`, `get_upcoming_hearings`, `get_bill_details`, `get_rule_details`, `get_hearing_details` | Congressional bills, Federal Register rules, committee hearings (two-stage sieve pattern) |
+| `ghostfolio-mcp` | `portfolio`, `account`, `order`, `market`, `reference`, `system` | Consolidated portfolio state, accounts, activities, market data from Ghostfolio |
+
+#### Estate & Finance
+
+| Server | Key Tools | Description |
+|--------|-----------|-------------|
+| `estate-planning-mcp` | `get_ownership_graph`, `get_net_worth`, `upsert_entity`, `set_ownership`, `upsert_succession_plan`, `upsert_compliance_obligation`, `link_document` | Entity/asset/person graph, ownership chains, succession planning, compliance tracking, document linking |
+| `finance-graph-mcp` | `get_net_worth`, `upsert_financial_statement_period`, `upsert_statement_line_items`, `record_valuation_observation`, `upsert_liability`, `analyze_refinance_npv`, `get_liability_summary` | Net worth roll-up, financial statement persistence, illiquid valuations, liability tracking, refinance analysis |
+| `household-tax-mcp` | `evaluate_scenario`, `compare_scenarios`, `optimize_strategy`, `ingest_returns`, `upsert_tax_profile`, `filing_readiness_report` | 12-scenario tax optimization, multi-year simulation, return ingestion, filing readiness |
+
+#### Household & Operations
+
+| Server | Key Tools | Description |
+|--------|-----------|-------------|
+| `grocy-mcp` | `get_stock_overview`, `get_missing_products`, `get_shopping_list`, `consume_product`, `add_missing_to_shopping_list`, `get_expiring_products` | Pantry inventory, stock tracking, shopping list management, expiration monitoring |
+| `homebox-mcp` | `list_items`, `create_item`, `get_item_maintenance`, `add_maintenance_entry`, `get_group_statistics`, `import_items_csv` | Home inventory, asset tracking, maintenance logs, location hierarchy |
+| `memos-mcp` | `list_memos`, `create_memo`, `search_memos`, `list_memo_comments`, `upload_attachment` | Quick capture, notes, decision logs, attachments |
+| `family-edu-mcp` | `get_learner_profile`, `record_observation`, `get_assessment_summary`, `create_weekly_activity_plan`, `recommend_activities_for_age`, `generate_term_brief` | Child development tracking, evidence pipeline, activity planning, assessment summaries |
+
+#### Health & Wellness
+
+| Server | Key Tools | Description |
+|--------|-----------|-------------|
+| `health-records-mcp` | `search_medical_documents`, `get_recent_lab_results`, `list_prescriptions`, `get_documents_by_provider`, `upload_medical_document` | Medical document management via Paperless-ngx with auto-tagging and provider tracking |
+| `wger-mcp` | `get_workout_log`, `get_nutrition_plan`, `get_body_weight`, `log_workout`, `log_nutrition_diary`, `get_nutrition_values` | Workout tracking, nutrition logging, body composition, macro calculations |
 
 ### Pinned upstream/forked dependencies
 

@@ -1,52 +1,67 @@
 # Contributing to StewardOS
 
-## Development Model
+## User Contributions
 
-This repository is an integration architecture. Contributions should prioritize:
+StewardOS is built for people who manage their own affairs — portfolio, household budget, health, estate — and have developed practical expertise doing it. The most valuable contributions encode real workflows as skills.
 
-- clear boundaries between persona capabilities,
-- safe defaults for self-hosted deployments,
-- reproducible MCP dependency pinning,
-- documented operational behavior.
+### Contributing a skill (no local setup required)
 
-StewardOS is maintained with a private-first workflow and curated public publishing. Public contributions should remain fully sanitized and reproducible.
+Skills are markdown files. You can contribute one without cloning the repo or running the stack:
 
-## Getting Started
+1. **Pick your persona**: choose the role that matches your expertise
+   - Managing investments → [Investment Officer](agent-configs/investment-officer/AGENTS.md)
+   - Running household finances → [Household Comptroller](agent-configs/household-comptroller/AGENTS.md)
+   - Handling estate/legal matters → [Estate Counsel](agent-configs/estate-counsel/AGENTS.md)
+   - Running household logistics → [Household Director](agent-configs/household-director/AGENTS.md)
+   - Tracking health/fitness → [Wellness Advisor](agent-configs/wellness-advisor/AGENTS.md)
+   - Coordinating across domains → [Chief of Staff](agent-configs/chief-of-staff/AGENTS.md)
+
+2. **Read 2-3 existing skills** in `skills/personas/<persona>/` to understand the structure
+
+3. **Write your skill** following the [Skill Contribution Guide](docs/community/skill-contribution-guide.md) — includes an annotated example, tool reference tables, and a PR checklist
+
+4. **Submit via GitHub**: create your `skills/personas/<persona>/<skill-name>/SKILL.md` file and open a PR
+
+### Sanitization checklist (all contributions)
+
+Before submitting any contribution, verify it contains none of the following:
+
+- [ ] Personal names, email addresses, or email aliases
+- [ ] Domain names, URLs, or IP addresses specific to a deployment
+- [ ] Account IDs, API keys, tokens, or credentials
+- [ ] File paths that include usernames or deployment-specific directories
+- [ ] References to specific financial accounts, portfolio holdings, or tax details
+
+## Development Contributions
+
+### Getting started
 
 1. Clone the repository.
 2. Copy required `*.example` files to local runtime equivalents.
 3. Bootstrap upstream MCP dependencies:
-   - `scripts/bootstrap_upstreams.sh`
+   ```bash
+   scripts/bootstrap_upstreams.sh
+   ```
 4. Verify pinned checkouts:
-   - `scripts/verify_upstreams.sh`
+   ```bash
+   scripts/verify_upstreams.sh
+   ```
 
-## Sensitive Files
+### Sensitive files
 
 Do not commit:
 
-- live `.env` files,
-- runtime `.codex` state,
-- OAuth credential/token files,
-- local database or log artifacts.
+- live `.env` files
+- runtime `.codex` state
+- OAuth credential/token files
+- local database or log artifacts
 
-Use sanitized `*.example` files.
+Use sanitized `*.example` files for any new configuration.
 
-## Pull Request Guidelines
+### Pull request guidelines
 
 - Keep changes scoped and documented.
 - Update architecture docs when behavior or boundaries change.
 - Include migration notes for any configuration contract change.
 - Preserve anonymization in public-facing examples and docs.
 - For persona/skill changes, include concrete before/after examples and rationale.
-
-## Skill Contributions
-
-Domain experts are encouraged to contribute role-specific skills:
-
-- nutrition/fitness experts for Wellness Advisor,
-- professional investors for Investment Officer,
-- CPAs/bookkeepers for Household Comptroller,
-- estate/legal practitioners for Estate Counsel.
-
-Start with:
-- `docs/community/skill-contribution-guide.md`
