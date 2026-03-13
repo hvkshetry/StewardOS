@@ -1,29 +1,36 @@
-"""Integration tests for portfolio-analytics risk engine.
+"""Live integration tests for portfolio-analytics risk engine.
 
-Tests use real data from Ghostfolio and yfinance (no mocks).
+These tests exercise Ghostfolio/yfinance-backed paths.
+Deterministic regime math coverage lives in ``test_risk_unit.py``.
 Requires GHOSTFOLIO_URL and GHOSTFOLIO_TOKEN env vars to be set.
 """
 
 from __future__ import annotations
 
 import os
-import sys
 
+import drift as drift_module
+import pandas as pd
+import prices as prices_module
 import pytest
-
-# Add parent dir to path so we can import server internals for unit-level checks
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from server import (
+import risk as risk_module
+from drift import (
+    _bucket_weights_from_holdings,
+    _holding_bucket_key,
+    _normalize_bucket_lookthrough,
+    _normalize_bucket_target_allocations,
+    analyze_bucket_allocation_drift,
+)
+from risk import (
     _compute_illiquid_overlay,
-    _detect_vol_regime,
     _fit_student_t,
     _parametric_es_student_t,
-    _risk_metrics,
     _risk_metrics_with_model,
+    analyze_hypothetical_portfolio_risk,
     analyze_portfolio_risk,
-    get_condensed_portfolio_state,
+    classify_barbell_buckets,
 )
+from snapshot import get_condensed_portfolio_state
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -61,22 +68,6 @@ class TestPhase1DataQuality:
             # If portfolio has illiquid/manual positions, warnings should exist
             assert len(integrity.get("data_quality_warnings", [])) > 0
             assert integrity["weight_coverage_pct"] < 1.0
-
-    async def test_data_quality_section_backward_compat(self):
-        _require_ghostfolio()
-        result = await analyze_portfolio_risk(scope_entity="all", strict=False)
-        # Legacy data_quality section still present
-        assert "data_quality" in result
-        dq = result["data_quality"]
-        assert "returns_observations" in dq
-        assert "lookback_days_requested" in dq
-        assert "missing_market_data_symbols" in dq
-
-
-# ---------------------------------------------------------------------------
-# Phase 2: Student-t ES
-# ---------------------------------------------------------------------------
-
 
 class TestPhase2StudentT:
     """Verify Student-t fitting and parametric ES."""
@@ -301,33 +292,6 @@ class TestPhase5RegimeDetection:
             assert regime["long_vol"] > 0
             assert regime["vol_ratio"] > 0
 
-    def test_regime_detection_unit(self):
-        """Unit test: regime detection on synthetic data."""
-        import numpy as np
-        import pandas as pd
-
-        rng = np.random.default_rng(42)
-        # Normal vol period
-        returns = pd.Series(rng.normal(0.0005, 0.01, 252))
-        regime = _detect_vol_regime(returns)
-        assert regime["current_regime"] in ("low", "normal", "elevated")
-        assert regime["vol_ratio"] > 0
-
-    def test_regime_crisis_detection(self):
-        """Unit test: crisis regime on high-vol data."""
-        import numpy as np
-        import pandas as pd
-
-        rng = np.random.default_rng(42)
-        # Long calm period followed by very short extreme vol spike
-        # long_window (63d) will be mostly calm, short_window (21d) all crisis
-        calm = rng.normal(0.0005, 0.005, 252)
-        crisis = rng.normal(-0.005, 0.06, 21)
-        returns = pd.Series(np.concatenate([calm, crisis]))
-        regime = _detect_vol_regime(returns)
-        # Short vol should be much higher than long vol
-        assert regime["vol_ratio"] > 1.3
-
 
 # ---------------------------------------------------------------------------
 # Phase 6: Risk Decomposition
@@ -424,6 +388,215 @@ class TestCrossPhaseIntegration:
         result = await get_condensed_portfolio_state(scope_entity="all", strict=False)
         assert result["ok"] is True
         assert "portfolio" in result
+
+
+class TestCashWeightScaling:
+    """Verify cash-like balances reduce modeled returns instead of disappearing."""
+
+    def test_download_returns_scales_tradeable_returns_by_total_weight(self, monkeypatch):
+        dates = pd.date_range("2026-01-01", periods=3, freq="B")
+        prices = pd.DataFrame({"VTI": [100.0, 101.0, 102.0]}, index=dates)
+        monkeypatch.setattr(prices_module, "_download_prices", lambda symbols, lookback_days: (prices, None))
+
+        weighted, quality = prices_module._download_returns(
+            {"VTI": 0.5, "USD": 0.5},
+            lookback_days=2,
+            scale_to_total_weight=True,
+        )
+
+        expected_last = ((102.0 / 101.0) - 1.0) * 0.5
+        assert weighted.iloc[-1] == pytest.approx(expected_last, rel=1e-6)
+        assert quality["zero_return_excluded_weight_sum"] == pytest.approx(0.5)
+        assert quality["scaled_to_total_weight"] is True
+
+    def test_download_returns_treats_canonical_cash_symbols_as_zero_return_ballast(self, monkeypatch):
+        dates = pd.date_range("2026-01-01", periods=3, freq="B")
+        prices = pd.DataFrame({"VTI": [100.0, 101.0, 102.0]}, index=dates)
+        monkeypatch.setattr(prices_module, "_download_prices", lambda symbols, lookback_days: (prices, None))
+
+        weighted, quality = prices_module._download_returns(
+            {"VTI": 0.5, "CASH:USD": 0.5},
+            lookback_days=2,
+            scale_to_total_weight=True,
+        )
+
+        expected_last = ((102.0 / 101.0) - 1.0) * 0.5
+        assert weighted.iloc[-1] == pytest.approx(expected_last, rel=1e-6)
+        assert quality["zero_return_excluded_symbols"] == ["CASH:USD"]
+        assert quality["zero_return_excluded_weight_sum"] == pytest.approx(0.5)
+
+
+class TestBarbellGapMath:
+    """Verify safe/convex/fragile gap outputs."""
+
+    async def test_classify_barbell_reports_gap_values(self, monkeypatch):
+        async def _fake_load_scoped_holdings(**kwargs):
+            return {
+                "snapshot_as_of": "2026-03-05T00:00:00+00:00",
+                "snapshot_id": "snap_barbell",
+                "scope": {"entity": "all", "tax_wrapper": "all", "account_types": "all", "owner": "all"},
+                "warnings": [],
+                "coverage": {},
+                "provenance": {},
+                "holdings": [
+                    {"symbol": "USD", "valueInBaseCurrency": 100.0, "assetClass": "LIQUIDITY", "assetSubClass": "CASH"},
+                    {"symbol": "GLDM", "valueInBaseCurrency": 100.0, "assetClass": "COMMODITY", "assetSubClass": "GOLD"},
+                    {"symbol": "VTI", "valueInBaseCurrency": 800.0, "assetClass": "EQUITY", "assetSubClass": "US_LARGE_BLEND"},
+                ],
+            }
+
+        monkeypatch.setattr(risk_module, "_load_scoped_holdings", _fake_load_scoped_holdings)
+
+        result = await classify_barbell_buckets(strict=False)
+        assert result["ok"] is True
+        assert result["safe_gap_pct"] == pytest.approx(0.05)
+        assert result["safe_gap_value"] == pytest.approx(50.0)
+        assert result["convex_gap_pct"] == pytest.approx(0.0)
+        assert result["fragile_excess_pct"] == pytest.approx(0.10)
+        assert result["signal"] == "FRAGILE"
+
+
+class TestHypotheticalRisk:
+    """Verify hypothetical portfolio risk uses target allocations and compares to current state."""
+
+    async def test_hypothetical_risk_reduces_es_with_cash_target(self, monkeypatch):
+        async def _fake_load_scoped_holdings(**kwargs):
+            return {
+                "snapshot_as_of": "2026-03-05T00:00:00+00:00",
+                "snapshot_id": "snap_hypothetical",
+                "scope": {"entity": "all", "tax_wrapper": "all", "account_types": "all", "owner": "all"},
+                "warnings": [],
+                "coverage": {},
+                "provenance": {},
+                "holdings": [
+                    {
+                        "accountId": "acct1",
+                        "symbol": "VTI",
+                        "valueInBaseCurrency": 1000.0,
+                        "marketPrice": 100.0,
+                        "quantity": 10.0,
+                        "assetClass": "EQUITY",
+                        "assetSubClass": "US_LARGE_BLEND",
+                        "currency": "USD",
+                    },
+                ],
+            }
+
+        def _fake_download_returns(weights, lookback_days, holdings_meta=None, scale_to_total_weight=False):
+            dates = pd.date_range("2026-01-01", periods=60, freq="B")
+            risk_weight = sum(
+                weight
+                for symbol, weight in weights.items()
+                if symbol not in {"USD", "CASH"} and not symbol.startswith("CASH:")
+            )
+            base = pd.Series([0.001] * 58 + [-0.04, -0.04], index=dates, dtype=float)
+            scaled = base * risk_weight
+            excluded_symbols = [symbol for symbol in weights if symbol == "USD" or symbol.startswith("CASH:")]
+            return scaled, {
+                "missing_symbols": [],
+                "excluded_symbols": excluded_symbols,
+                "zero_return_excluded_symbols": excluded_symbols,
+                "available_symbols": [symbol for symbol in weights if symbol not in excluded_symbols],
+                "original_weight_sum": sum(weights.values()),
+                "tradeable_weight_sum": risk_weight,
+                "available_weight_sum": risk_weight,
+                "missing_tradeable_weight_sum": 0.0,
+                "zero_return_excluded_weight_sum": sum(weights.get(symbol, 0.0) for symbol in excluded_symbols),
+                "weight_coverage_pct": 1.0,
+                "renormalized": False,
+                "scaled_to_total_weight": scale_to_total_weight,
+                "scale_factor": risk_weight,
+                "yfinance_error": None,
+                "observations": int(len(scaled)),
+                "nan_fill_symbols": [],
+                "data_quality_warnings": [],
+            }
+
+        monkeypatch.setattr(risk_module, "_load_scoped_holdings", _fake_load_scoped_holdings)
+        monkeypatch.setattr(risk_module, "_download_returns", _fake_download_returns)
+
+        result = await analyze_hypothetical_portfolio_risk(
+            target_allocations={"USD": 0.5, "VTI": 0.5},
+            include_fx_risk=False,
+            include_decomposition=False,
+            strict=False,
+        )
+
+        assert result["ok"] is True
+        assert result["verification_pass"] is True
+        assert result["improves_vs_current"] is True
+        assert result["within_policy_limit"] is True
+        assert result["delta_vs_current"]["es_975_1d"] < 0
+        assert result["post_plan_barbell"]["safe_gap_pct"] == pytest.approx(0.0)
+        assert result["post_plan_barbell"]["fragile_excess_pct"] == pytest.approx(0.0)
+
+    async def test_hypothetical_risk_surfaces_improvement_separately_from_policy_limit(self, monkeypatch):
+        async def _fake_load_scoped_holdings(**kwargs):
+            return {
+                "snapshot_as_of": "2026-03-05T00:00:00+00:00",
+                "snapshot_id": "snap_hypothetical",
+                "scope": {"entity": "all", "tax_wrapper": "all", "account_types": "all", "owner": "all"},
+                "warnings": [],
+                "coverage": {},
+                "provenance": {},
+                "holdings": [
+                    {
+                        "accountId": "acct1",
+                        "symbol": "VTI",
+                        "valueInBaseCurrency": 1000.0,
+                        "marketPrice": 100.0,
+                        "quantity": 10.0,
+                        "assetClass": "EQUITY",
+                        "assetSubClass": "US_LARGE_BLEND",
+                        "currency": "USD",
+                    },
+                ],
+            }
+
+        def _fake_download_returns(weights, lookback_days, holdings_meta=None, scale_to_total_weight=False):
+            dates = pd.date_range("2026-01-01", periods=60, freq="B")
+            risk_weight = sum(
+                weight
+                for symbol, weight in weights.items()
+                if symbol not in {"USD", "CASH"} and not symbol.startswith("CASH:")
+            )
+            base = pd.Series([0.001] * 58 + [-0.04, -0.04], index=dates, dtype=float)
+            scaled = base * risk_weight
+            return scaled, {
+                "missing_symbols": [],
+                "excluded_symbols": [],
+                "zero_return_excluded_symbols": [],
+                "available_symbols": [symbol for symbol in weights if not symbol.startswith("CASH:")],
+                "original_weight_sum": sum(weights.values()),
+                "tradeable_weight_sum": risk_weight,
+                "available_weight_sum": risk_weight,
+                "missing_tradeable_weight_sum": 0.0,
+                "zero_return_excluded_weight_sum": 0.0,
+                "weight_coverage_pct": 1.0,
+                "renormalized": False,
+                "scaled_to_total_weight": scale_to_total_weight,
+                "scale_factor": risk_weight,
+                "yfinance_error": None,
+                "observations": int(len(scaled)),
+                "nan_fill_symbols": [],
+                "data_quality_warnings": [],
+            }
+
+        monkeypatch.setattr(risk_module, "_load_scoped_holdings", _fake_load_scoped_holdings)
+        monkeypatch.setattr(risk_module, "_download_returns", _fake_download_returns)
+
+        result = await analyze_hypothetical_portfolio_risk(
+            target_allocations={"USD": 0.5, "VTI": 0.5},
+            es_limit=0.015,
+            include_fx_risk=False,
+            include_decomposition=False,
+            strict=False,
+        )
+
+        assert result["ok"] is True
+        assert result["improves_vs_current"] is True
+        assert result["within_policy_limit"] is False
+        assert result["verification_pass"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -600,10 +773,8 @@ class TestFXDirection:
 
     def test_inr_weakening_reduces_usd_return(self):
         """When USDINR rises (INR weakens), USD return on INR asset should decrease."""
-        import numpy as np
         import pandas as pd
-
-        from server import _adjust_returns_for_fx
+        from fx import _adjust_returns_for_fx
 
         dates = pd.date_range("2024-01-01", periods=5, freq="B")
 
@@ -629,10 +800,8 @@ class TestFXDirection:
 
     def test_inr_strengthening_boosts_usd_return(self):
         """When USDINR falls (INR strengthens), USD return on INR asset should increase."""
-        import numpy as np
         import pandas as pd
-
-        from server import _adjust_returns_for_fx
+        from fx import _adjust_returns_for_fx
 
         dates = pd.date_range("2024-01-01", periods=5, freq="B")
 
@@ -670,3 +839,161 @@ class TestFXVolFields:
             for cur, info in currencies.items():
                 # annualized_vol field should exist (may be None if insufficient data)
                 assert "annualized_vol" in info
+
+
+class TestBucketAllocationDrift:
+    """Verify bucket-level IPS drift analytics helpers and tool behavior."""
+
+    def test_normalize_bucket_targets(self):
+        targets = _normalize_bucket_target_allocations({"equity:us_large_blend": 60, "fixed_income:aggregate": 40})
+        assert abs(sum(targets.values()) - 1.0) < 1e-10
+        assert "EQUITY:US_LARGE_BLEND" in targets
+        assert "FIXED_INCOME:AGGREGATE" in targets
+
+    def test_holding_bucket_key_uses_override(self):
+        row = {
+            "symbol": "AVUV",
+            "assetClass": "EQUITY",
+            "assetSubClass": "US_SMALL_VALUE",
+        }
+        key = _holding_bucket_key(row, bucket_overrides={"AVUV": "EQUITY:DM_SMALL_VALUE"})
+        assert key == "EQUITY:DM_SMALL_VALUE"
+
+    def test_holding_bucket_key_uses_yfinance_fallback_for_unclassified(self, monkeypatch):
+        monkeypatch.setattr(
+            drift_module,
+            "_lookup_yfinance_bucket",
+            lambda symbol: ("EQUITY:INTERNATIONAL_DEVELOPED", "unit_test"),
+        )
+        row = {"symbol": "VXUS", "assetClass": None, "assetSubClass": None}
+        tracker: dict[str, dict[str, str]] = {}
+        key = _holding_bucket_key(row, fallback_tracker=tracker)
+        assert key == "EQUITY:INTERNATIONAL_DEVELOPED"
+        assert tracker["VXUS"]["from_bucket"] == "UNCLASSIFIED"
+        assert tracker["VXUS"]["to_bucket"] == "EQUITY:INTERNATIONAL_DEVELOPED"
+
+    def test_normalize_bucket_lookthrough_percent_input(self):
+        normalized = _normalize_bucket_lookthrough(
+            [
+                {"symbol": "VFIFX", "bucket_key": "EQUITY:US_LARGE_BLEND", "fraction_weight": 53.0},
+                {"symbol": "VFIFX", "bucket_key": "EQUITY:INTERNATIONAL_DEVELOPED", "fraction_weight": 37.6},
+                {"symbol": "VFIFX", "bucket_key": "FIXED_INCOME:AGGREGATE", "fraction_weight": 6.8},
+                {"symbol": "VFIFX", "bucket_key": "FIXED_INCOME:TIPS", "fraction_weight": 2.6},
+            ]
+        )
+        vfifx_rows = normalized["VFIFX"]
+        assert len(vfifx_rows) == 4
+        assert abs(sum(weight for _, weight in vfifx_rows) - 1.0) < 1e-10
+
+    def test_bucket_weights_from_holdings_applies_lookthrough(self):
+        weights, values, total = _bucket_weights_from_holdings(
+            holdings=[
+                {
+                    "symbol": "VFIFX",
+                    "assetClass": "EQUITY",
+                    "assetSubClass": "US_LARGE_BLEND",
+                    "valueInBaseCurrency": 100.0,
+                }
+            ],
+            bucket_overrides={"VFIFX": "EQUITY:US_LARGE_BLEND"},
+            bucket_lookthrough={
+                "VFIFX": [
+                    ("EQUITY:US_LARGE_BLEND", 0.60),
+                    ("FIXED_INCOME:AGGREGATE", 0.40),
+                ]
+            },
+        )
+        assert total == 100.0
+        assert abs(weights["EQUITY:US_LARGE_BLEND"] - 0.60) < 1e-10
+        assert abs(weights["FIXED_INCOME:AGGREGATE"] - 0.40) < 1e-10
+        assert abs(values["EQUITY:US_LARGE_BLEND"] - 60.0) < 1e-10
+        assert abs(values["FIXED_INCOME:AGGREGATE"] - 40.0) < 1e-10
+
+    async def test_bucket_drift_with_stubbed_scope(self, monkeypatch):
+        async def _fake_load_scoped_holdings(**kwargs):
+            return {
+                "snapshot_as_of": "2026-03-04T00:00:00+00:00",
+                "snapshot_id": "snap_test",
+                "scope": {
+                    "entity": "all",
+                    "tax_wrapper": "all",
+                    "account_types": "all",
+                    "owner": "all",
+                },
+                "warnings": [],
+                "coverage": {},
+                "holdings": [
+                    {
+                        "symbol": "VOO",
+                        "assetClass": "EQUITY",
+                        "assetSubClass": "US_LARGE_BLEND",
+                        "valueInBaseCurrency": 60.0,
+                    },
+                    {
+                        "symbol": "BND",
+                        "assetClass": "FIXED_INCOME",
+                        "assetSubClass": "AGGREGATE",
+                        "valueInBaseCurrency": 40.0,
+                    },
+                ],
+                "provenance": {"source": "unit_test"},
+            }
+
+        monkeypatch.setattr(drift_module, "_load_scoped_holdings", _fake_load_scoped_holdings)
+
+        result = await analyze_bucket_allocation_drift(
+            target_bucket_allocations={
+                "EQUITY:US_LARGE_BLEND": 0.50,
+                "FIXED_INCOME:AGGREGATE": 0.50,
+            },
+            drift_threshold=0.05,
+            strict=False,
+        )
+        assert result["ok"] is True
+        assert result["bucket_lookthrough"] == []
+
+        actions = {row["bucket_key"]: row["action"] for row in result["flagged_trades"]}
+        assert actions["EQUITY:US_LARGE_BLEND"] == "sell"
+        assert actions["FIXED_INCOME:AGGREGATE"] == "buy"
+
+    async def test_bucket_drift_reports_yfinance_fallbacks(self, monkeypatch):
+        async def _fake_load_scoped_holdings(**kwargs):
+            return {
+                "snapshot_as_of": "2026-03-04T00:00:00+00:00",
+                "snapshot_id": "snap_test_fallback",
+                "scope": {
+                    "entity": "all",
+                    "tax_wrapper": "all",
+                    "account_types": "all",
+                    "owner": "all",
+                },
+                "warnings": [],
+                "coverage": {},
+                "holdings": [
+                    {
+                        "symbol": "VXUS",
+                        "assetClass": None,
+                        "assetSubClass": None,
+                        "valueInBaseCurrency": 100.0,
+                    },
+                ],
+                "provenance": {"source": "unit_test"},
+            }
+
+        monkeypatch.setattr(drift_module, "_load_scoped_holdings", _fake_load_scoped_holdings)
+        monkeypatch.setattr(
+            drift_module,
+            "_lookup_yfinance_bucket",
+            lambda symbol: ("EQUITY:INTERNATIONAL_DEVELOPED", "unit_test"),
+        )
+
+        result = await analyze_bucket_allocation_drift(
+            target_bucket_allocations={"EQUITY:INTERNATIONAL_DEVELOPED": 1.0},
+            drift_threshold=0.01,
+            strict=False,
+        )
+        assert result["ok"] is True
+        assert len(result["yfinance_bucket_fallbacks"]) == 1
+        assert result["yfinance_bucket_fallbacks"][0]["symbol"] == "VXUS"
+        assert result["yfinance_bucket_fallbacks"][0]["to_bucket"] == "EQUITY:INTERNATIONAL_DEVELOPED"
+        assert any("Applied yfinance metadata fallback" in warning for warning in result["warnings"])

@@ -4,8 +4,8 @@ Provides unfiltered government data for LLM analysis.
 """
 import logging
 from typing import List, Dict, Any
-from fastmcp import FastMCP
-from fastmcp.exceptions import ToolError
+from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import Field
 
 # Import our simple bulk clients
@@ -20,10 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Initialize FastMCP server
-mcp = FastMCP(
-    name="policy-events-service",
-    version="2.0.0"
-)
+mcp = FastMCP("policy-events-service")
 
 @mcp.tool()
 async def get_recent_bills(

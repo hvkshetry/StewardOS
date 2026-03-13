@@ -1,0 +1,9 @@
+[project]
+name = "peloton-mcp"
+version = "0.1.0"
+description = "Read-only MCP wrapper for Peloton workouts and performance data"
+requires-python = ">=3.10"
+dependencies = [
+  "mcp>=1.0.0",
+  "httpx>=0.27.0",
+]

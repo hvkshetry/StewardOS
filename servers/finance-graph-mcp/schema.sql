@@ -76,9 +76,7 @@ CREATE TABLE IF NOT EXISTS assets (
     jurisdiction_id INTEGER REFERENCES jurisdictions(id),
     owner_entity_id INTEGER REFERENCES entities(id),
     owner_person_id INTEGER REFERENCES people(id),
-    current_valuation_amount NUMERIC(18,2),
-    valuation_currency TEXT NOT NULL DEFAULT 'USD',
-    valuation_date  DATE,
+    current_valuation_observation_id INTEGER,
     acquisition_date DATE,
     acquisition_cost NUMERIC(18,2),
     paperless_doc_id INTEGER,                      -- link to Paperless-ngx document
@@ -87,7 +85,7 @@ CREATE TABLE IF NOT EXISTS assets (
     notes           TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT asset_has_owner CHECK (owner_entity_id IS NOT NULL OR owner_person_id IS NOT NULL)
+    CONSTRAINT asset_has_owner CHECK (num_nonnulls(owner_entity_id, owner_person_id) = 1)
 );
 
 -- ─── Ownership Paths (fractional ownership graph) ────────────────
@@ -120,7 +118,7 @@ CREATE TABLE IF NOT EXISTS documents (
     id              SERIAL PRIMARY KEY,
     title           TEXT NOT NULL,
     doc_type        TEXT NOT NULL,                  -- trust_agreement, llc_agreement, deed, will, poa, k1, tax_return, registration, certificate, other
-    paperless_doc_id INTEGER,                       -- Paperless-ngx document ID
+    paperless_doc_id INTEGER UNIQUE,                -- Paperless-ngx document ID
     vaultwarden_item_id TEXT,                       -- Vaultwarden item ID (for sensitive docs)
     entity_id       INTEGER REFERENCES entities(id),
     asset_id        INTEGER REFERENCES assets(id),
@@ -132,6 +130,23 @@ CREATE TABLE IF NOT EXISTS documents (
     notes           TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS document_metadata (
+    paperless_doc_id            INTEGER PRIMARY KEY REFERENCES documents(paperless_doc_id) ON DELETE CASCADE,
+    entity_id                   INTEGER REFERENCES entities(id),
+    asset_id                    INTEGER REFERENCES assets(id),
+    person_id                   INTEGER REFERENCES people(id),
+    jurisdiction_id             INTEGER REFERENCES jurisdictions(id),
+    doc_purpose_type            TEXT NOT NULL DEFAULT 'other',
+    effective_date              DATE,
+    expiry_date                 DATE,
+    status                      TEXT NOT NULL DEFAULT 'active',
+    source_snapshot_title       TEXT,
+    source_snapshot_doc_type    TEXT,
+    notes                       TEXT,
+    created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ─── Critical Dates ──────────────────────────────────────────────
@@ -188,20 +203,6 @@ LEFT JOIN entities oe ON op.owner_entity_id = oe.id
 LEFT JOIN entities oe2 ON op.owned_entity_id = oe2.id
 LEFT JOIN assets a ON op.owned_asset_id = a.id
 WHERE op.end_date IS NULL OR op.end_date > CURRENT_DATE;
-
--- Net worth by jurisdiction
-CREATE OR REPLACE VIEW v_net_worth_by_jurisdiction AS
-SELECT
-    j.code AS jurisdiction_code,
-    j.name AS jurisdiction_name,
-    j.country,
-    a.valuation_currency AS currency,
-    SUM(a.current_valuation_amount) AS total_value,
-    COUNT(*) AS asset_count
-FROM assets a
-JOIN jurisdictions j ON a.jurisdiction_id = j.id
-WHERE a.current_valuation_amount IS NOT NULL
-GROUP BY j.code, j.name, j.country, a.valuation_currency;
 
 -- ─── Recursive CTE function for transitive ownership ─────────────
 -- Usage: SELECT * FROM finance.get_transitive_ownership(person_id := 1);
@@ -355,6 +356,37 @@ CREATE TABLE IF NOT EXISTS valuation_observations (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'assets_current_valuation_observation_fk'
+    ) THEN
+        ALTER TABLE assets
+            ADD CONSTRAINT assets_current_valuation_observation_fk
+            FOREIGN KEY (current_valuation_observation_id)
+            REFERENCES valuation_observations(id)
+            ON DELETE SET NULL;
+    END IF;
+END
+$$;
+
+-- Net worth by jurisdiction
+CREATE OR REPLACE VIEW v_net_worth_by_jurisdiction AS
+SELECT
+    j.code AS jurisdiction_code,
+    j.name AS jurisdiction_name,
+    j.country,
+    cvo.value_currency AS currency,
+    SUM(cvo.value_amount) AS total_value,
+    COUNT(*) AS asset_count
+FROM assets a
+LEFT JOIN valuation_observations cvo ON cvo.id = a.current_valuation_observation_id
+JOIN jurisdictions j ON a.jurisdiction_id = j.id
+WHERE cvo.value_amount IS NOT NULL
+GROUP BY j.code, j.name, j.country, cvo.value_currency;
+
 CREATE TABLE IF NOT EXISTS valuation_comps (
     id                         SERIAL PRIMARY KEY,
     valuation_observation_id   INTEGER NOT NULL REFERENCES valuation_observations(id) ON DELETE CASCADE,
@@ -484,12 +516,14 @@ CREATE TABLE IF NOT EXISTS xbrl_facts (
     concept_id          INTEGER NOT NULL REFERENCES xbrl_concepts(id),
     context_id          INTEGER REFERENCES xbrl_contexts(id),
     unit_id             INTEGER REFERENCES xbrl_units(id),
+    fact_fingerprint    TEXT NOT NULL,
     fact_value_text     TEXT,
     fact_value_numeric  NUMERIC(30,10),
     decimals            TEXT,
     precision           TEXT,
     metadata            JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT xbrl_fact_unique UNIQUE (xbrl_report_id, fact_fingerprint)
 );
 
 -- ─── OCF Store (v1.2.0 pinned schema compatibility) ──────────────
@@ -598,10 +632,11 @@ CREATE TABLE IF NOT EXISTS liability_payments (
     id                      SERIAL PRIMARY KEY,
     liability_id            INTEGER NOT NULL REFERENCES liabilities(id) ON DELETE CASCADE,
     payment_date            DATE NOT NULL,
-    amount_total            NUMERIC(20,4) NOT NULL,
-    amount_principal        NUMERIC(20,4),
-    amount_interest         NUMERIC(20,4),
-    amount_escrow           NUMERIC(20,4),
+    amount_total            NUMERIC(20,4) NOT NULL CHECK (amount_total >= 0),
+    amount_principal        NUMERIC(20,4) CHECK (amount_principal IS NULL OR amount_principal >= 0),
+    amount_interest         NUMERIC(20,4) CHECK (amount_interest IS NULL OR amount_interest >= 0),
+    amount_escrow           NUMERIC(20,4) CHECK (amount_escrow IS NULL OR amount_escrow >= 0),
+    idempotency_key         TEXT UNIQUE,
     source                  TEXT NOT NULL DEFAULT 'manual',
     reference               TEXT,
     metadata                JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -659,12 +694,91 @@ CREATE TABLE IF NOT EXISTS liability_analytics_runs (
     created_at                  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS ips_target_profiles (
+    id                      SERIAL PRIMARY KEY,
+    profile_code            TEXT NOT NULL,
+    name                    TEXT NOT NULL,
+    status                  TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'active', 'archived')),
+    effective_from          DATE NOT NULL,
+    effective_to            DATE,
+    base_currency           TEXT NOT NULL DEFAULT 'USD',
+    scope_entity            TEXT NOT NULL DEFAULT 'all' CHECK (scope_entity IN ('all', 'personal', 'trust')),
+    scope_wrapper           TEXT NOT NULL DEFAULT 'all' CHECK (scope_wrapper IN ('all', 'taxable', 'tax_deferred', 'tax_exempt')),
+    scope_owner             TEXT NOT NULL DEFAULT 'all' CHECK (scope_owner IN ('all', 'Principal', 'Spouse', 'joint')),
+    scope_account_types     TEXT[],
+    drift_threshold         NUMERIC(8,6) NOT NULL DEFAULT 0.03 CHECK (drift_threshold >= 0),
+    rebalance_band_abs      NUMERIC(8,6),
+    review_cadence          TEXT,
+    notes                   TEXT,
+    metadata                JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT ips_target_profiles_effective_dates_chk
+        CHECK (effective_to IS NULL OR effective_to >= effective_from),
+    CONSTRAINT ips_target_profiles_code_effective_unique UNIQUE (profile_code, effective_from)
+);
+
+CREATE TABLE IF NOT EXISTS ips_target_allocations (
+    id                      SERIAL PRIMARY KEY,
+    profile_id              INTEGER NOT NULL REFERENCES ips_target_profiles(id) ON DELETE CASCADE,
+    bucket_key              TEXT NOT NULL,
+    target_weight           NUMERIC(10,8) NOT NULL CHECK (target_weight >= 0),
+    min_weight              NUMERIC(10,8),
+    max_weight              NUMERIC(10,8),
+    tilt_tag                TEXT,
+    metadata                JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT ips_target_allocations_unique UNIQUE (profile_id, bucket_key),
+    CONSTRAINT ips_target_allocations_bounds_chk
+        CHECK (
+            (min_weight IS NULL OR min_weight >= 0)
+            AND (max_weight IS NULL OR max_weight >= 0)
+            AND (min_weight IS NULL OR min_weight <= target_weight)
+            AND (max_weight IS NULL OR max_weight >= target_weight)
+        )
+);
+
+CREATE TABLE IF NOT EXISTS ips_bucket_overrides (
+    id                      SERIAL PRIMARY KEY,
+    symbol                  TEXT NOT NULL,
+    data_source             TEXT NOT NULL DEFAULT 'YAHOO',
+    override_bucket_key     TEXT NOT NULL,
+    scope_entity            TEXT NOT NULL DEFAULT 'all' CHECK (scope_entity IN ('all', 'personal', 'trust')),
+    scope_wrapper           TEXT NOT NULL DEFAULT 'all' CHECK (scope_wrapper IN ('all', 'taxable', 'tax_deferred', 'tax_exempt')),
+    scope_owner             TEXT NOT NULL DEFAULT 'all' CHECK (scope_owner IN ('all', 'Principal', 'Spouse', 'joint')),
+    scope_account_types     TEXT[],
+    active                  BOOLEAN NOT NULL DEFAULT TRUE,
+    notes                   TEXT,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ips_bucket_lookthrough (
+    id                      SERIAL PRIMARY KEY,
+    symbol                  TEXT NOT NULL,
+    data_source             TEXT NOT NULL DEFAULT 'YAHOO',
+    bucket_key              TEXT NOT NULL,
+    fraction_weight         NUMERIC(10,8) NOT NULL CHECK (fraction_weight > 0 AND fraction_weight <= 1),
+    source_as_of            DATE,
+    scope_entity            TEXT NOT NULL DEFAULT 'all' CHECK (scope_entity IN ('all', 'personal', 'trust')),
+    scope_wrapper           TEXT NOT NULL DEFAULT 'all' CHECK (scope_wrapper IN ('all', 'taxable', 'tax_deferred', 'tax_exempt')),
+    scope_owner             TEXT NOT NULL DEFAULT 'all' CHECK (scope_owner IN ('all', 'Principal', 'Spouse', 'joint')),
+    scope_account_types     TEXT[],
+    active                  BOOLEAN NOT NULL DEFAULT TRUE,
+    notes                   TEXT,
+    metadata                JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS idx_asset_taxonomy_class ON asset_taxonomy(asset_class_id);
 CREATE INDEX IF NOT EXISTS idx_asset_taxonomy_subclass ON asset_taxonomy(asset_subclass_id);
 CREATE INDEX IF NOT EXISTS idx_asset_taxonomy_country_region ON asset_taxonomy(country_code, region_code);
 CREATE INDEX IF NOT EXISTS idx_assets_jurisdiction ON assets(jurisdiction_id);
 CREATE INDEX IF NOT EXISTS idx_real_estate_country_state ON real_estate_assets(country_code, state_code);
 CREATE INDEX IF NOT EXISTS idx_valuation_observations_asset_date ON valuation_observations(asset_id, valuation_date DESC);
+CREATE INDEX IF NOT EXISTS idx_assets_current_valuation_observation ON assets(current_valuation_observation_id);
 CREATE INDEX IF NOT EXISTS idx_reporting_periods_asset_end ON reporting_periods(asset_id, period_end DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_reporting_periods_unique
 ON reporting_periods(asset_id, period_start, period_end, COALESCE(fiscal_period, ''));
@@ -680,6 +794,41 @@ CREATE INDEX IF NOT EXISTS idx_liability_schedule_due_date ON liability_cashflow
 CREATE INDEX IF NOT EXISTS idx_liability_payments_date ON liability_payments(liability_id, payment_date);
 CREATE INDEX IF NOT EXISTS idx_refinance_offers_liability_date ON refinance_offers(liability_id, offer_date);
 CREATE INDEX IF NOT EXISTS idx_liability_analytics_runs_liability ON liability_analytics_runs(liability_id, run_date);
+
+CREATE INDEX IF NOT EXISTS idx_ips_profiles_scope
+ON ips_target_profiles(status, effective_from DESC, effective_to, scope_entity, scope_wrapper, scope_owner);
+CREATE INDEX IF NOT EXISTS idx_ips_profiles_account_types_gin
+ON ips_target_profiles USING GIN (scope_account_types);
+CREATE INDEX IF NOT EXISTS idx_ips_allocations_profile ON ips_target_allocations(profile_id);
+CREATE INDEX IF NOT EXISTS idx_ips_overrides_symbol_scope
+ON ips_bucket_overrides(symbol, data_source, active, scope_entity, scope_wrapper, scope_owner);
+CREATE INDEX IF NOT EXISTS idx_ips_overrides_account_types_gin
+ON ips_bucket_overrides USING GIN (scope_account_types);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ips_overrides_unique_active
+ON ips_bucket_overrides (
+    symbol,
+    data_source,
+    scope_entity,
+    scope_wrapper,
+    scope_owner,
+    COALESCE(scope_account_types, '{}'::text[])
+)
+WHERE active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_ips_lookthrough_symbol_scope
+ON ips_bucket_lookthrough(symbol, data_source, active, scope_entity, scope_wrapper, scope_owner);
+CREATE INDEX IF NOT EXISTS idx_ips_lookthrough_account_types_gin
+ON ips_bucket_lookthrough USING GIN (scope_account_types);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ips_lookthrough_unique_active
+ON ips_bucket_lookthrough (
+    symbol,
+    data_source,
+    bucket_key,
+    scope_entity,
+    scope_wrapper,
+    scope_owner,
+    COALESCE(scope_account_types, '{}'::text[])
+)
+WHERE active = TRUE;
 
 INSERT INTO valuation_methods (code, name, description) VALUES
     ('rentcast_avm', 'RentCast AVM', 'US-only automated residential/land valuation from RentCast'),

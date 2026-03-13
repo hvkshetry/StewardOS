@@ -18,6 +18,14 @@ mcp = FastMCP(
 )
 
 
+def _ok_response(payload):
+    return {"status": "ok", "errors": [], "data": payload}
+
+
+def _error_response(message: str, *, code: str) -> dict:
+    return {"status": "error", "errors": [{"code": code, "message": message}], "data": None}
+
+
 def _headers() -> dict[str, str]:
     headers = {"Accept": "application/json"}
     if MEMOS_TOKEN:
@@ -33,19 +41,25 @@ def _client() -> httpx.AsyncClient:
     )
 
 
-async def _request(method: str, path: str, **kwargs) -> dict | list | str:
+async def _request(method: str, path: str, **kwargs) -> dict:
     """Execute an HTTP request against the Memos API."""
     try:
         async with _client() as client:
             resp = await client.request(method, path, **kwargs)
             resp.raise_for_status()
             if resp.status_code == 204:
-                return {"status": "ok"}
-            return resp.json()
+                return _ok_response({"status": "success"})
+            try:
+                return _ok_response(resp.json())
+            except ValueError:
+                return _ok_response(resp.text)
     except httpx.HTTPStatusError as exc:
-        return f"HTTP {exc.response.status_code}: {exc.response.text}"
+        return _error_response(
+            f"HTTP {exc.response.status_code}: {exc.response.text}",
+            code="http_error",
+        )
     except httpx.RequestError as exc:
-        return f"Request failed: {exc}"
+        return _error_response(f"Request failed: {exc}", code="request_error")
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +72,7 @@ async def list_memos(
     page_size: int = 20,
     page_token: str = "",
     filter: str = "",
-) -> dict | list | str:
+) -> dict:
     """List memos with optional pagination and filtering.
 
     Args:
@@ -75,7 +89,7 @@ async def list_memos(
 
 
 @mcp.tool()
-async def get_memo(id: int) -> dict | str:
+async def get_memo(id: int) -> dict:
     """Get a single memo by its numeric ID.
 
     Args:
@@ -88,7 +102,7 @@ async def get_memo(id: int) -> dict | str:
 async def create_memo(
     content: str,
     visibility: str = "PRIVATE",
-) -> dict | str:
+) -> dict:
     """Create a new memo.
 
     Args:
@@ -107,7 +121,7 @@ async def update_memo(
     id: int,
     content: str | None = None,
     visibility: str | None = None,
-) -> dict | str:
+) -> dict:
     """Update an existing memo's content and/or visibility.
 
     Args:
@@ -124,7 +138,10 @@ async def update_memo(
         body["visibility"] = visibility
         update_masks.append("visibility")
     if not update_masks:
-        return "Nothing to update. Provide content and/or visibility."
+        return _error_response(
+            "Nothing to update. Provide content and/or visibility.",
+            code="validation_error",
+        )
     return await _request(
         "PATCH",
         f"/api/v1/memos/{id}",
@@ -134,7 +151,7 @@ async def update_memo(
 
 
 @mcp.tool()
-async def delete_memo(id: int) -> dict | str:
+async def delete_memo(id: int) -> dict:
     """Delete a memo by its numeric ID.
 
     Args:
@@ -153,7 +170,7 @@ async def search_memos(
     query: str,
     page_size: int = 20,
     page_token: str = "",
-) -> dict | list | str:
+) -> dict:
     """Search memos by keyword. Wraps the query into a CEL content.contains() filter.
 
     Args:
@@ -176,7 +193,7 @@ async def search_memos(
 
 
 @mcp.tool()
-async def list_memo_comments(id: int) -> dict | list | str:
+async def list_memo_comments(id: int) -> dict:
     """List all comments on a memo.
 
     Args:
@@ -186,7 +203,7 @@ async def list_memo_comments(id: int) -> dict | list | str:
 
 
 @mcp.tool()
-async def create_memo_comment(id: int, content: str) -> dict | str:
+async def create_memo_comment(id: int, content: str) -> dict:
     """Add a comment to a memo.
 
     Args:
@@ -206,7 +223,7 @@ async def create_memo_comment(id: int, content: str) -> dict | str:
 
 
 @mcp.tool()
-async def list_memo_relations(id: int) -> dict | list | str:
+async def list_memo_relations(id: int) -> dict:
     """List all relations of a memo.
 
     Args:
@@ -216,7 +233,7 @@ async def list_memo_relations(id: int) -> dict | list | str:
 
 
 @mcp.tool()
-async def set_memo_relations(id: int, relations: list[dict]) -> dict | str:
+async def set_memo_relations(id: int, relations: list[dict]) -> dict:
     """Set relations for a memo, replacing existing relations.
 
     Args:
@@ -237,7 +254,7 @@ async def set_memo_relations(id: int, relations: list[dict]) -> dict | str:
 
 
 @mcp.tool()
-async def list_memo_reactions(id: int) -> dict | list | str:
+async def list_memo_reactions(id: int) -> dict:
     """List all reactions on a memo.
 
     Args:
@@ -247,7 +264,7 @@ async def list_memo_reactions(id: int) -> dict | list | str:
 
 
 @mcp.tool()
-async def upsert_reaction(id: int, reaction_type: str) -> dict | str:
+async def upsert_reaction(id: int, reaction_type: str) -> dict:
     """Add or update a reaction on a memo.
 
     Args:
@@ -267,13 +284,13 @@ async def upsert_reaction(id: int, reaction_type: str) -> dict | str:
 
 
 @mcp.tool()
-async def list_attachments() -> dict | list | str:
+async def list_attachments() -> dict:
     """List all attachments (resources) in the Memos instance."""
     return await _request("GET", "/api/v1/attachments")
 
 
 @mcp.tool()
-async def upload_attachment(file_path: str) -> dict | str:
+async def upload_attachment(file_path: str) -> dict:
     """Upload a file as an attachment to Memos.
 
     Args:
@@ -291,17 +308,20 @@ async def upload_attachment(file_path: str) -> dict | str:
                     files={"file": (filename, f, mime_type)},
                 )
                 resp.raise_for_status()
-                return resp.json()
+                return _ok_response(resp.json())
     except FileNotFoundError:
-        return f"File not found: {file_path}"
+        return _error_response(f"File not found: {file_path}", code="file_not_found")
     except httpx.HTTPStatusError as exc:
-        return f"HTTP {exc.response.status_code}: {exc.response.text}"
+        return _error_response(
+            f"HTTP {exc.response.status_code}: {exc.response.text}",
+            code="http_error",
+        )
     except httpx.RequestError as exc:
-        return f"Request failed: {exc}"
+        return _error_response(f"Request failed: {exc}", code="request_error")
 
 
 @mcp.tool()
-async def delete_attachment(id: int) -> dict | str:
+async def delete_attachment(id: int) -> dict:
     """Delete an attachment by its numeric ID.
 
     Args:
@@ -316,7 +336,7 @@ async def delete_attachment(id: int) -> dict | str:
 
 
 @mcp.tool()
-async def get_user_stats(id: str = "me") -> dict | str:
+async def get_user_stats(id: str = "me") -> dict:
     """Get memo statistics for a user.
 
     Args:
@@ -326,13 +346,13 @@ async def get_user_stats(id: str = "me") -> dict | str:
 
 
 @mcp.tool()
-async def get_instance_profile() -> dict | str:
+async def get_instance_profile() -> dict:
     """Get the Memos instance profile (version, mode, etc.)."""
     return await _request("GET", "/api/v1/instance/profile")
 
 
 @mcp.tool()
-async def list_users() -> dict | list | str:
+async def list_users() -> dict:
     """List all users on the Memos instance."""
     return await _request("GET", "/api/v1/users")
 

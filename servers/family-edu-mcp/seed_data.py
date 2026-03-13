@@ -1,24 +1,25 @@
-"""Seed the family-edu database with CDC milestones and age-appropriate activities.
+"""Seed learner-records catalogs (milestones + age activities).
 
-Run once to populate the database:
-    python seed_data.py [child_id]
-
-If child_id is provided, milestones are created for that child.
-If omitted, only activities are seeded (milestones require a child).
+Usage:
+    DATABASE_URL=postgresql://family_edu:...@localhost:5434/family_edu \
+    python seed_data.py [learner_id]
 """
 
+import asyncio
+import hashlib
 import os
-import sqlite3
+import re
 import sys
+from pathlib import Path
 
-DB_PATH = os.environ.get("FAMILY_EDU_DB", "./family_edu.db")
+import asyncpg
 
-# ---------------------------------------------------------------------------
-# CDC developmental milestones by category and expected age in months
-# Source: CDC "Learn the Signs. Act Early." milestone checklists
-# ---------------------------------------------------------------------------
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL", "postgresql://family_edu:changeme@localhost:5434/family_edu"
+)
+SCHEMA_SQL = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
+
 MILESTONES = [
-    # --- Motor milestones ---
     ("motor", "Raises head and chest when lying on stomach", 2),
     ("motor", "Pushes down on legs when feet on flat surface", 3),
     ("motor", "Rolls over in both directions", 6),
@@ -37,7 +38,6 @@ MILESTONES = [
     ("motor", "Hops on one foot", 48),
     ("motor", "Catches a bounced ball most of the time", 48),
     ("motor", "Skips", 60),
-    # --- Language milestones ---
     ("language", "Coos and makes gurgling sounds", 2),
     ("language", "Babbles with expression (ba-ba, da-da)", 6),
     ("language", "Responds to own name", 7),
@@ -51,7 +51,6 @@ MILESTONES = [
     ("language", "Tells stories", 48),
     ("language", "Says full name and address", 60),
     ("language", "Uses future tense correctly", 60),
-    # --- Social/Emotional milestones ---
     ("social", "Begins to smile at people", 2),
     ("social", "Enjoys playing with others, especially parents", 4),
     ("social", "May be afraid of strangers", 8),
@@ -65,7 +64,6 @@ MILESTONES = [
     ("social", "Wants to please friends", 60),
     ("social", "Aware of gender", 60),
     ("social", "More likely to agree with rules", 60),
-    # --- Cognitive milestones ---
     ("cognitive", "Pays attention to faces", 2),
     ("cognitive", "Follows moving things with eyes", 3),
     ("cognitive", "Explores things by putting them in mouth", 6),
@@ -82,11 +80,7 @@ MILESTONES = [
     ("cognitive", "Copies triangle and other shapes", 60),
 ]
 
-# ---------------------------------------------------------------------------
-# Age-appropriate activities
-# ---------------------------------------------------------------------------
 ACTIVITIES = [
-    # Infant activities (0-12 months)
     ("Tummy Time", "Place baby on stomach on a firm surface to strengthen neck and shoulder muscles", 0, 6, "motor", 10, "indoor"),
     ("High-Contrast Cards", "Show black and white high-contrast cards to stimulate visual development", 0, 4, "sensory", 10, "indoor"),
     ("Rattle Play", "Shake a rattle near baby's ear to encourage tracking and reaching", 2, 6, "sensory", 10, "indoor"),
@@ -97,8 +91,6 @@ ACTIVITIES = [
     ("Music and Movement", "Play music and gently move baby's arms and legs to the beat", 2, 12, "music", 15, "indoor"),
     ("Sensory Bin - Rice", "Fill a shallow container with rice and safe objects to explore textures", 6, 18, "sensory", 20, "indoor"),
     ("Ball Rolling", "Roll a ball back and forth to practice tracking and reaching", 6, 18, "motor", 15, "both"),
-
-    # Toddler activities (12-36 months)
     ("Shape Sorter", "Match shapes through correct holes for cognitive and fine motor development", 12, 30, "cognitive", 15, "indoor"),
     ("Finger Painting", "Use non-toxic finger paints on large paper for creative expression", 12, 48, "art", 30, "indoor"),
     ("Sandbox Play", "Dig, pour, and build in sand for sensory and fine motor skills", 12, 60, "sensory", 30, "outdoor"),
@@ -113,8 +105,6 @@ ACTIVITIES = [
     ("Animal Sound Game", "Show animal pictures and practice making their sounds", 12, 30, "language", 15, "both"),
     ("Dancing to Music", "Put on music and dance freely for gross motor and rhythm", 12, 60, "music", 20, "both"),
     ("Pouring Practice", "Practice pouring water or rice between containers", 18, 36, "motor", 15, "indoor"),
-
-    # Preschool activities (36-60 months)
     ("Letter Tracing", "Trace letters on worksheets or in sand/salt trays", 36, 72, "language", 20, "indoor"),
     ("Counting Games", "Count objects, fingers, toes, or steps during daily activities", 30, 60, "cognitive", 15, "both"),
     ("Obstacle Course", "Set up pillows, chairs, and tunnels for a physical challenge course", 30, 72, "motor", 30, "both"),
@@ -134,77 +124,108 @@ ACTIVITIES = [
 ]
 
 
-def seed_milestones(conn: sqlite3.Connection, child_id: int) -> int:
-    """Insert CDC milestones for a given child. Returns count of rows inserted."""
-    count = 0
+def _slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+    return slug or "item"
+
+
+def milestone_code(category: str, description: str) -> str:
+    base = _slug(f"{category}_{description}")
+    digest = hashlib.sha1(description.encode("utf-8")).hexdigest()[:8]
+    return f"{base[:48]}_{digest}"
+
+
+def activity_key(title: str) -> str:
+    digest = hashlib.sha1(title.encode("utf-8")).hexdigest()[:8]
+    return f"{_slug(title)[:48]}_{digest}"
+
+
+def _rows_affected(status: str) -> int:
+    try:
+        return int(status.split()[-1])
+    except Exception:
+        return 0
+
+
+async def seed_milestone_definitions(conn: asyncpg.Connection) -> int:
+    inserted = 0
     for category, description, expected_months in MILESTONES:
-        # Avoid duplicates
-        existing = conn.execute(
-            "SELECT id FROM milestones WHERE child_id = ? AND description = ?",
-            (child_id, description),
-        ).fetchone()
-        if existing:
-            continue
-        conn.execute(
-            "INSERT INTO milestones (child_id, category, description, expected_age_months) "
-            "VALUES (?, ?, ?, ?)",
-            (child_id, category, description, expected_months),
+        status = await conn.execute(
+            "INSERT INTO milestone_definitions (code, category, description, expected_age_months) "
+            "VALUES ($1, $2, $3, $4) ON CONFLICT (code) DO NOTHING",
+            milestone_code(category, description),
+            category,
+            description,
+            expected_months,
         )
-        count += 1
-    return count
+        inserted += _rows_affected(status)
+    return inserted
 
 
-def seed_activities(conn: sqlite3.Connection) -> int:
-    """Insert activity catalog. Returns count of rows inserted."""
-    count = 0
-    for title, desc, min_age, max_age, cat, duration, io in ACTIVITIES:
-        existing = conn.execute(
-            "SELECT id FROM activities WHERE title = ?", (title,)
-        ).fetchone()
-        if existing:
-            continue
-        conn.execute(
-            "INSERT INTO activities (title, description, min_age_months, max_age_months, "
-            "category, duration_minutes, indoor_outdoor) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (title, desc, min_age, max_age, cat, duration, io),
+async def seed_activity_catalog(conn: asyncpg.Connection) -> int:
+    inserted = 0
+    for title, desc, min_age, max_age, category, duration, indoor_outdoor in ACTIVITIES:
+        status = await conn.execute(
+            "INSERT INTO activity_catalog (builtin_key, title, description, min_age_months, max_age_months, "
+            "category, duration_minutes, indoor_outdoor) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) "
+            "ON CONFLICT (builtin_key) DO NOTHING",
+            activity_key(title),
+            title,
+            desc,
+            min_age,
+            max_age,
+            category,
+            duration,
+            indoor_outdoor,
         )
-        count += 1
-    return count
+        inserted += _rows_affected(status)
+    return inserted
 
 
-def main():
-    child_id = int(sys.argv[1]) if len(sys.argv) > 1 else None
-
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA foreign_keys=ON")
-
-    activity_count = seed_activities(conn)
-    print(f"Seeded {activity_count} activities ({len(ACTIVITIES)} total in catalog).")
-
-    if child_id is not None:
-        # Verify child exists
-        child = conn.execute(
-            "SELECT * FROM children WHERE id = ?", (child_id,)
-        ).fetchone()
-        if not child:
-            print(f"Error: No child found with id={child_id}. Add a child first via the MCP server.")
-            conn.close()
-            sys.exit(1)
-        milestone_count = seed_milestones(conn, child_id)
-        print(
-            f"Seeded {milestone_count} milestones for child '{child[1]}' "
-            f"({len(MILESTONES)} total in catalog)."
+async def seed_learner_milestone_statuses(
+    conn: asyncpg.Connection, learner_id: int | None = None
+) -> int:
+    if learner_id is not None:
+        status = await conn.execute(
+            "INSERT INTO learner_milestone_status (learner_id, milestone_definition_id, status) "
+            "SELECT $1, md.id, 'pending' FROM milestone_definitions md "
+            "ON CONFLICT (learner_id, milestone_definition_id) DO NOTHING",
+            learner_id,
         )
-    else:
-        print(
-            "No child_id provided. Run 'python seed_data.py <child_id>' after adding a child "
-            "to seed their milestones."
-        )
+        return _rows_affected(status)
 
-    conn.commit()
-    conn.close()
-    print("Done.")
+    status = await conn.execute(
+        "INSERT INTO learner_milestone_status (learner_id, milestone_definition_id, status) "
+        "SELECT l.id, md.id, 'pending' "
+        "FROM learners l CROSS JOIN milestone_definitions md "
+        "ON CONFLICT (learner_id, milestone_definition_id) DO NOTHING"
+    )
+    return _rows_affected(status)
+
+
+async def _main() -> None:
+    learner_id = int(sys.argv[1]) if len(sys.argv) > 1 else None
+
+    pool = await asyncpg.create_pool(
+        DATABASE_URL,
+        min_size=1,
+        max_size=2,
+        server_settings={"search_path": "family_edu,public"},
+    )
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(SCHEMA_SQL)
+                m = await seed_milestone_definitions(conn)
+                a = await seed_activity_catalog(conn)
+                s = await seed_learner_milestone_statuses(conn, learner_id)
+                print(f"Seeded milestone_definitions: {m}")
+                print(f"Seeded activity_catalog: {a}")
+                print(f"Seeded learner_milestone_status: {s}")
+    finally:
+        await pool.close()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(_main())

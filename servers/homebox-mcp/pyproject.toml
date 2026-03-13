@@ -3,4 +3,14 @@ name = "homebox-mcp"
 version = "0.1.0"
 description = "MCP server for Homebox home inventory management"
 requires-python = ">=3.10"
-dependencies = ["fastmcp>=2.0", "httpx>=0.26.0"]
+dependencies = ["mcp>=1.0.0", "httpx>=0.26.0"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.23",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

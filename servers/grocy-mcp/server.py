@@ -19,6 +19,14 @@ mcp = FastMCP(
 )
 
 
+def _ok_response(payload):
+    return {"status": "ok", "errors": [], "data": payload}
+
+
+def _error_response(message: str, *, code: str):
+    return {"status": "error", "errors": [{"code": code, "message": message}], "data": None}
+
+
 def _headers() -> dict[str, str]:
     return {
         "Accept": "application/json",
@@ -35,19 +43,22 @@ def _client() -> httpx.AsyncClient:
     )
 
 
-async def _request(method: str, path: str, **kwargs) -> dict | list | str:
+async def _request(method: str, path: str, **kwargs) -> dict:
     """Execute an HTTP request against the Grocy API."""
     try:
         async with _client() as client:
             resp = await client.request(method, path, **kwargs)
             resp.raise_for_status()
             if resp.status_code == 204:
-                return {"status": "success"}
-            return resp.json()
+                return _ok_response({"status": "success"})
+            return _ok_response(resp.json())
     except httpx.HTTPStatusError as exc:
-        return f"HTTP {exc.response.status_code}: {exc.response.text}"
+        return _error_response(
+            f"HTTP {exc.response.status_code}: {exc.response.text}",
+            code="http_error",
+        )
     except httpx.RequestError as exc:
-        return f"Request failed: {exc}"
+        return _error_response(f"Request failed: {exc}", code="request_failed")
 
 
 @mcp.tool()
@@ -106,10 +117,13 @@ async def consume_product(
 @mcp.tool()
 async def get_shopping_list(list_id: int = 1) -> dict | list | str:
     """Get shopping list items. Default list_id=1 is the main shopping list."""
-    items = await _request("GET", "/api/objects/shopping_list")
+    result = await _request("GET", "/api/objects/shopping_list")
+    if result["status"] != "ok":
+        return result
+    items = result.get("data")
     if isinstance(items, list):
-        return [i for i in items if i.get("shopping_list_id") == list_id]
-    return items
+        return _ok_response([i for i in items if i.get("shopping_list_id") == list_id])
+    return result
 
 
 @mcp.tool()
@@ -210,8 +224,11 @@ async def get_expiring_products(due_soon_days: int = 5) -> dict | list | str:
         "/api/stock/volatile",
         params={"due_soon_days": due_soon_days},
     )
-    if isinstance(result, dict):
-        return result.get("due_products", result)
+    if result["status"] != "ok":
+        return result
+    data = result.get("data")
+    if isinstance(data, dict):
+        return _ok_response(data.get("due_products", data))
     return result
 
 

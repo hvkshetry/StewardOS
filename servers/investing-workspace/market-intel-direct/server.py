@@ -4,17 +4,21 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import json
 import os
 import random
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 
 import httpx
 import pandas as pd
 import yfinance as yf
-from fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 
 
 server = FastMCP("market-intel-direct")
@@ -58,6 +62,21 @@ _TICKER_RE = re.compile(r'^[A-Z]{1,5}$|^\^[A-Z]{2,6}$|^[A-Z]{1,5}[=.][A-Z]{1,2}$
 _GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
 _NEWS_CONNECT_TIMEOUT_SEC = 5.0
 _NEWS_READ_TIMEOUT_SEC = 8.0
+_SHILLER_DATA_PAGE_URL = os.getenv("SHILLER_CAPE_DATA_PAGE_URL", "https://shillerdata.com/")
+_SHILLER_DATA_FALLBACK_URL = os.getenv(
+    "SHILLER_CAPE_FALLBACK_XLS_URL",
+    "https://www.econ.yale.edu/~shiller/data/ie_data.xls",
+)
+_SHILLER_CACHE_PATH = Path(
+    os.getenv("SHILLER_CAPE_CACHE_PATH", "/tmp/market-intel-direct-shiller-cape.json")
+)
+_SHILLER_CACHE_TTL_SECONDS = max(
+    300, int(os.getenv("SHILLER_CAPE_CACHE_TTL_SECONDS", "21600"))
+)
+_SHILLER_MAX_STALENESS_DAYS = max(
+    1, int(os.getenv("SHILLER_CAPE_STALENESS_MAX_DAYS", "45"))
+)
+_OPTION_CAPABILITY_LEVELS = {"none": 0, "long_premium": 1, "vertical_spreads": 2}
 
 CFTC_POSITION_FIELDS = {
     "dealer": (
@@ -127,9 +146,12 @@ def _coerce_float(value: Any) -> float | None:
     if value in (None, "", "."):
         return None
     try:
-        return float(value)
+        numeric = float(value)
     except (TypeError, ValueError):
         return None
+    if pd.isna(numeric):
+        return None
+    return numeric
 
 
 def _first_numeric(row: dict[str, Any], keys: tuple[str, ...]) -> float | None:
@@ -217,6 +239,249 @@ def _normalize_market_codes(market_codes: list[str] | None) -> list[str]:
         if cleaned:
             normalized.append(cleaned)
     return normalized
+
+
+def _cache_load(path: Path, ttl_seconds: int) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    fetched_at = _coerce_float(payload.get("fetched_at_epoch"))
+    if fetched_at is None or (time.time() - fetched_at) > ttl_seconds:
+        return None
+    return payload
+
+
+def _cache_store(path: Path, payload: dict[str, Any]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload))
+    except OSError:
+        return
+
+
+def _is_plausible_shiller_payload(payload: dict[str, Any]) -> bool:
+    value = _coerce_float(payload.get("value"))
+    history_points = _coerce_float(payload.get("history_points"))
+    observation_date = payload.get("observation_date")
+    if value is None or value <= 1.0:
+        return False
+    if history_points is None or history_points < 100:
+        return False
+    if not isinstance(observation_date, str) or not observation_date:
+        return False
+    return True
+
+
+def _normalize_header_label(value: Any) -> str:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    return re.sub(r"[^a-z0-9]+", "", str(value).strip().lower())
+
+
+def _parse_decimal_year_month(value: Any) -> datetime | None:
+    numeric = _coerce_float(value)
+    if numeric is None:
+        return None
+    year = int(numeric)
+    if year < 1800 or year > 2200:
+        return None
+    fraction = max(0.0, numeric - year)
+    month_hint = int(round(fraction * 100))
+    if 1 <= month_hint <= 12:
+        month = month_hint
+    else:
+        month = int(round(fraction * 12)) + 1
+    month = max(1, min(month, 12))
+    try:
+        return datetime(year, month, 1, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _extract_shiller_xls_url(html: str) -> str | None:
+    match = re.search(r'href=["\']([^"\']*ie_data\.xls[^"\']*)["\']', html, flags=re.IGNORECASE)
+    if not match:
+        match = re.search(r'(https?://[^"\'>\s]*ie_data\.xls[^"\'>\s]*)', html, flags=re.IGNORECASE)
+    if not match:
+        return None
+    candidate = match.group(1).strip()
+    return urljoin(_SHILLER_DATA_PAGE_URL, candidate)
+
+
+def _parse_shiller_cape_workbook(content: bytes) -> dict[str, Any]:
+    workbook = pd.read_excel(io.BytesIO(content), sheet_name=None, header=None, engine="xlrd")
+    if workbook is None:
+        raise ValueError("Shiller workbook was empty")
+
+    candidate_frames: list[pd.DataFrame] = []
+    if isinstance(workbook, dict):
+        if not workbook:
+            raise ValueError("Shiller workbook was empty")
+        if "Data" in workbook:
+            candidate_frames.append(workbook["Data"])
+        candidate_frames.extend(
+            frame for sheet_name, frame in workbook.items()
+            if sheet_name != "Data"
+        )
+    else:
+        if workbook.empty:
+            raise ValueError("Shiller workbook was empty")
+        candidate_frames.append(workbook)
+
+    header_row = None
+    parsed = None
+    for frame in candidate_frames:
+        if frame is None or frame.empty:
+            continue
+
+        header_row_index = None
+        best_score = -1
+        for idx in range(min(len(frame), 25)):
+            normalized = [_normalize_header_label(value) for value in frame.iloc[idx].tolist()]
+            if "date" in normalized and any("cape" in value or value == "pe10" for value in normalized):
+                score = sum(1 for token in ("date", "p", "d", "e", "cpi", "cape") if token in normalized)
+                if score > best_score or (score == best_score and header_row_index is not None and idx > header_row_index):
+                    header_row_index = idx
+                    best_score = score
+
+        if header_row_index is None:
+            continue
+
+        header_row = frame.iloc[header_row_index].tolist()
+        parsed = frame.iloc[header_row_index + 1 :].copy()
+        break
+
+    if header_row is None or parsed is None:
+        raise ValueError("Could not locate the CAPE header row in the Shiller workbook")
+
+    parsed.columns = [
+        str(value).strip() if value is not None and not (isinstance(value, float) and pd.isna(value)) else f"col_{idx}"
+        for idx, value in enumerate(header_row)
+    ]
+    normalized_columns = {
+        column: _normalize_header_label(column)
+        for column in parsed.columns
+    }
+
+    date_column = next(
+        (
+            column
+            for column, normalized in normalized_columns.items()
+            if normalized == "date" or normalized.startswith("date")
+        ),
+        None,
+    )
+    cape_column = next(
+        (
+            column
+            for column, normalized in normalized_columns.items()
+            if normalized == "cape" or normalized == "pe10" or normalized.endswith("cape")
+        ),
+        None,
+    )
+
+    if date_column is None or cape_column is None:
+        raise ValueError("Could not find date/CAPE columns in the Shiller workbook")
+
+    rows: list[tuple[datetime, float]] = []
+    for _, row in parsed.iterrows():
+        observed_at = _parse_decimal_year_month(row.get(date_column))
+        cape_value = _coerce_float(row.get(cape_column))
+        if observed_at is None or cape_value is None or cape_value <= 0:
+            continue
+        rows.append((observed_at, float(cape_value)))
+
+    if not rows:
+        raise ValueError("Shiller workbook did not contain any usable CAPE rows")
+
+    history_values = [cape for _, cape in rows]
+    latest_observed_at, latest_cape = rows[-1]
+    percentile = _percentile_rank(history_values, latest_cape)
+    staleness_days = max(
+        0, (datetime.now(timezone.utc).date() - latest_observed_at.date()).days
+    )
+
+    return {
+        "value": round(latest_cape, 2),
+        "observation_date": latest_observed_at.date().isoformat(),
+        "percentile_vs_history": round(percentile, 1),
+        "history_points": len(rows),
+        "staleness_days": staleness_days,
+        "stale": staleness_days > _SHILLER_MAX_STALENESS_DAYS,
+    }
+
+
+async def _fetch_shiller_cape_payload(provider: str = "auto") -> dict[str, Any]:
+    resolved_provider = "official_shiller_dataset"
+    if provider not in {"auto", resolved_provider}:
+        return _error_response(
+            source="shiller_cape",
+            error_code="invalid_input",
+            message=f"Unsupported provider '{provider}'.",
+            retryable=False,
+            details={"allowed": ["auto", resolved_provider]},
+        )
+
+    cached = _cache_load(_SHILLER_CACHE_PATH, _SHILLER_CACHE_TTL_SECONDS)
+    if cached and _is_plausible_shiller_payload(cached):
+        payload = dict(cached)
+        payload.pop("fetched_at_epoch", None)
+        payload["cached"] = True
+        return payload
+
+    warnings: list[str] = []
+    started_at = time.monotonic()
+    source_url = _SHILLER_DATA_FALLBACK_URL
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=20.0) as client:
+            try:
+                page_response = await client.get(_SHILLER_DATA_PAGE_URL)
+                page_response.raise_for_status()
+                discovered_url = _extract_shiller_xls_url(page_response.text)
+                if discovered_url:
+                    source_url = discovered_url
+                else:
+                    warnings.append("Shiller data page did not expose an ie_data.xls link; using fallback URL")
+            except Exception as exc:
+                warnings.append(f"Failed to discover Shiller workbook URL dynamically: {exc}")
+
+            workbook_response = await client.get(source_url)
+            workbook_response.raise_for_status()
+
+        parsed = _parse_shiller_cape_workbook(workbook_response.content)
+    except Exception as exc:
+        return _error_response(
+            source="shiller_cape",
+            error_code="upstream_request_failed",
+            message=f"Failed to fetch Shiller CAPE data: {exc}",
+            retryable=True,
+            details={"provider": resolved_provider, "source_url": source_url},
+        )
+
+    payload = {
+        "ok": True,
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "provider": resolved_provider,
+        "source_url": source_url,
+        "warnings": warnings,
+        "cached": False,
+        "diagnostics": {
+            "elapsed_seconds": round(time.monotonic() - started_at, 3),
+            "cache_ttl_seconds": _SHILLER_CACHE_TTL_SECONDS,
+            "max_staleness_days": _SHILLER_MAX_STALENESS_DAYS,
+        },
+        **parsed,
+    }
+    _cache_store(
+        _SHILLER_CACHE_PATH,
+        {
+            **payload,
+            "fetched_at_epoch": time.time(),
+        },
+    )
+    return payload
 
 
 def _normalize_cot_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -1152,5 +1417,654 @@ async def search_market_news(
     }
 
 
+# ---------------------------------------------------------------------------
+# Market Temperature Gauge (Marks-inspired)
+# ---------------------------------------------------------------------------
+
+
+def _percentile_rank(values: list[float], current: float) -> float:
+    """Compute percentile rank of current value within historical values (0-100)."""
+    if not values:
+        return 50.0
+    below = sum(1 for v in values if v < current)
+    equal = sum(1 for v in values if v == current)
+    return 100.0 * (below + 0.5 * equal) / len(values)
+
+
+def _normalize_options_capability(value: str | None) -> str:
+    cleaned = str(value or "none").strip().lower()
+    if cleaned not in _OPTION_CAPABILITY_LEVELS:
+        return "none"
+    return cleaned
+
+
+def _summarize_candidate_reasons(
+    regime_fit: float,
+    convexity_quality: float,
+    carry_score: float,
+    simplicity_score: float,
+) -> list[str]:
+    reasons: list[str] = []
+    if regime_fit >= 8:
+        reasons.append("strong regime fit")
+    elif regime_fit <= 4:
+        reasons.append("weak regime fit")
+    if convexity_quality >= 8:
+        reasons.append("high convexity quality")
+    if carry_score <= 4:
+        reasons.append("meaningful carry drag")
+    elif carry_score >= 8:
+        reasons.append("low structural carry drag")
+    if simplicity_score <= 4:
+        reasons.append("high implementation complexity")
+    return reasons
+
+
+async def _infer_convex_regime_context(
+    current_regime_override: str | None = None,
+) -> dict[str, Any]:
+    override = (current_regime_override or "").strip().lower()
+    override_map = {
+        "inflationary": "inflationary",
+        "stagflation": "inflationary",
+        "reflation": "inflationary",
+        "deflationary": "deflationary",
+        "deflation": "deflationary",
+        "recession": "deflationary",
+        "disinflationary": "mixed",
+        "mixed": "mixed",
+        "normal": "mixed",
+    }
+    if override:
+        resolved = override_map.get(override)
+        if resolved:
+            return {
+                "regime_label": resolved,
+                "source": "override",
+                "warnings": [],
+            }
+
+    api_key = os.getenv("FRED_API_KEY", "").strip()
+    if not api_key:
+        return {
+            "regime_label": "mixed",
+            "source": "fallback",
+            "warnings": ["FRED_API_KEY not configured; defaulting convex ranking regime to mixed"],
+        }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            dgs10, cpi = await asyncio.gather(
+                _fetch_fred_observations(client, api_key, "DGS10", days_back=60, limit=10),
+                _fetch_fred_observations(client, api_key, "CPIAUCSL", days_back=500, limit=16),
+            )
+        dgs10_obs = dgs10.get("observations", [])
+        cpi_obs = cpi.get("observations", [])
+        nominal_10y = (dgs10_obs[-1]["value"] / 100.0) if dgs10_obs else None
+        yoy_cpi = None
+        if len(cpi_obs) >= 13:
+            latest = cpi_obs[-1]["value"]
+            prior = cpi_obs[-13]["value"]
+            if prior > 0:
+                yoy_cpi = (latest - prior) / prior
+
+        regime_label = "mixed"
+        if yoy_cpi is not None and yoy_cpi >= 0.03:
+            regime_label = "inflationary"
+        elif nominal_10y is not None and nominal_10y >= 0.04 and (yoy_cpi is None or yoy_cpi <= 0.025):
+            regime_label = "deflationary"
+
+        return {
+            "regime_label": regime_label,
+            "source": "fred",
+            "warnings": [],
+            "nominal_10y": nominal_10y,
+            "cpi_yoy": yoy_cpi,
+        }
+    except Exception as exc:
+        return {
+            "regime_label": "mixed",
+            "source": "fallback",
+            "warnings": [f"Failed to infer regime from FRED data: {exc}"],
+        }
+
+
+def _option_mid_price(option_row: pd.Series) -> float | None:
+    bid = _coerce_float(option_row.get("bid"))
+    ask = _coerce_float(option_row.get("ask"))
+    last = _coerce_float(option_row.get("lastPrice"))
+    if bid is not None and ask is not None and bid > 0 and ask > 0:
+        return (bid + ask) / 2.0
+    if last is not None and last > 0:
+        return last
+    if ask is not None and ask > 0:
+        return ask
+    if bid is not None and bid > 0:
+        return bid
+    return None
+
+
+async def _estimate_spy_put_spread(
+    *,
+    target_days: int,
+    long_otm: float,
+    short_otm: float,
+) -> dict[str, Any] | None:
+    def _sync_fetch() -> dict[str, Any] | None:
+        ticker = yf.Ticker("SPY")
+        history = ticker.history(period="5d", interval="1d", auto_adjust=True)
+        if history is None or history.empty:
+            return None
+        spot = float(history["Close"].dropna().iloc[-1])
+        expiries = getattr(ticker, "options", []) or []
+        if not expiries:
+            return None
+
+        best_expiry = None
+        best_days = None
+        today = datetime.now(timezone.utc).date()
+        for expiry_str in expiries:
+            try:
+                expiry_date = datetime.fromisoformat(expiry_str).date()
+            except ValueError:
+                continue
+            days = (expiry_date - today).days
+            if days < 30:
+                continue
+            if best_days is None or abs(days - target_days) < abs(best_days - target_days):
+                best_days = days
+                best_expiry = expiry_str
+        if best_expiry is None or best_days is None:
+            return None
+
+        chain = ticker.option_chain(best_expiry)
+        puts = getattr(chain, "puts", None)
+        if puts is None or puts.empty or "strike" not in puts.columns:
+            return None
+        strikes = puts["strike"].dropna().astype(float)
+        if strikes.empty:
+            return None
+
+        long_target = spot * (1.0 - long_otm)
+        short_target = spot * (1.0 - short_otm)
+        long_strike = min(strikes.tolist(), key=lambda strike: abs(strike - long_target))
+        short_strike = min(strikes.tolist(), key=lambda strike: abs(strike - short_target))
+        if short_strike >= long_strike:
+            return None
+
+        long_row = puts.loc[puts["strike"] == long_strike].iloc[0]
+        short_row = puts.loc[puts["strike"] == short_strike].iloc[0]
+        long_mid = _option_mid_price(long_row)
+        short_mid = _option_mid_price(short_row)
+        if long_mid is None or short_mid is None:
+            return None
+
+        debit = max(long_mid - short_mid, 0.0)
+        min_open_interest = min(
+            int(_coerce_float(long_row.get("openInterest")) or 0),
+            int(_coerce_float(short_row.get("openInterest")) or 0),
+        )
+        return {
+            "spot_price": round(spot, 2),
+            "expiry": best_expiry,
+            "days_to_expiry": best_days,
+            "long_strike": round(float(long_strike), 2),
+            "short_strike": round(float(short_strike), 2),
+            "net_debit_per_share": round(debit, 2),
+            "net_debit_pct_spot": round((debit / spot) if spot > 0 else 0.0, 4),
+            "min_open_interest": min_open_interest,
+        }
+
+    return await asyncio.to_thread(_sync_fetch)
+
+
+@server.tool()
+async def get_shiller_cape(provider: str = "auto") -> dict[str, Any]:
+    """Get the latest strict Shiller CAPE value from the official published dataset."""
+    return await _fetch_shiller_cape_payload(provider=provider)
+
+
+@server.tool()
+async def rank_convex_candidates(
+    target_convex_add_pct: float | None = None,
+    target_convex_add_value: float | None = None,
+    scope_wrapper: str = "all",
+    allow_options: bool = False,
+    options_capability: str = "none",
+    current_regime_override: str | None = None,
+) -> dict[str, Any]:
+    """Rank retail-accessible convex candidates by regime fit, carry drag, and implementation burden."""
+    resolved_options_capability = _normalize_options_capability(options_capability)
+    regime_context = await _infer_convex_regime_context(current_regime_override=current_regime_override)
+    warnings = list(regime_context.get("warnings", []))
+
+    static_candidates: list[dict[str, Any]] = [
+        {
+            "symbol": "GLDM",
+            "instrument_type": "etf",
+            "role": "gold hedge",
+            "regime_fit": {"inflationary": 9.0, "deflationary": 4.5, "mixed": 7.0},
+            "convexity_quality": 6.5,
+            "carry_score": 8.5,
+            "liquidity_score": 8.0,
+            "tax_fit_score": 8.0,
+            "simplicity_score": 9.5,
+            "primary_path_eligible": True,
+        },
+        {
+            "symbol": "IAU",
+            "instrument_type": "etf",
+            "role": "gold hedge",
+            "regime_fit": {"inflationary": 8.5, "deflationary": 4.0, "mixed": 6.8},
+            "convexity_quality": 6.5,
+            "carry_score": 8.0,
+            "liquidity_score": 8.5,
+            "tax_fit_score": 8.0,
+            "simplicity_score": 9.0,
+            "primary_path_eligible": True,
+        },
+        {
+            "symbol": "DBMF",
+            "instrument_type": "etf",
+            "role": "managed futures",
+            "regime_fit": {"inflationary": 8.5, "deflationary": 6.5, "mixed": 7.5},
+            "convexity_quality": 7.5,
+            "carry_score": 6.0,
+            "liquidity_score": 7.0,
+            "tax_fit_score": 7.0,
+            "simplicity_score": 7.5,
+            "primary_path_eligible": True,
+        },
+        {
+            "symbol": "KMLM",
+            "instrument_type": "etf",
+            "role": "managed futures",
+            "regime_fit": {"inflationary": 8.0, "deflationary": 6.5, "mixed": 7.0},
+            "convexity_quality": 7.0,
+            "carry_score": 5.5,
+            "liquidity_score": 6.5,
+            "tax_fit_score": 7.0,
+            "simplicity_score": 7.0,
+            "primary_path_eligible": True,
+        },
+        {
+            "symbol": "CAOS",
+            "instrument_type": "etf",
+            "role": "tail risk ETF",
+            "regime_fit": {"inflationary": 6.0, "deflationary": 8.5, "mixed": 8.0},
+            "convexity_quality": 9.0,
+            "carry_score": 3.5,
+            "liquidity_score": 5.5,
+            "tax_fit_score": 7.0,
+            "simplicity_score": 7.0,
+            "primary_path_eligible": True,
+        },
+        {
+            "symbol": "TLT",
+            "instrument_type": "etf",
+            "role": "duration hedge",
+            "regime_fit": {"inflationary": 2.5, "deflationary": 9.0, "mixed": 5.5},
+            "convexity_quality": 7.5,
+            "carry_score": 7.0,
+            "liquidity_score": 9.0,
+            "tax_fit_score": 7.0,
+            "simplicity_score": 9.0,
+            "primary_path_eligible": True,
+        },
+    ]
+
+    quotes = get_market_snapshot([candidate["symbol"] for candidate in static_candidates])
+    quote_map = {
+        row.get("symbol"): row
+        for row in quotes.get("quotes", [])
+        if isinstance(row, dict) and row.get("status") == "ok"
+    }
+
+    regime_label = str(regime_context.get("regime_label", "mixed")).strip().lower()
+    weighted_candidates: list[dict[str, Any]] = []
+    for candidate in static_candidates:
+        regime_fit = candidate["regime_fit"].get(regime_label, candidate["regime_fit"]["mixed"])
+        convexity_quality = candidate["convexity_quality"]
+        carry_score = candidate["carry_score"]
+        liquidity_score = candidate["liquidity_score"]
+        tax_fit_score = candidate["tax_fit_score"]
+        simplicity_score = candidate["simplicity_score"]
+        total_score = (
+            (regime_fit / 10.0) * 30.0
+            + (convexity_quality / 10.0) * 25.0
+            + (carry_score / 10.0) * 15.0
+            + (liquidity_score / 10.0) * 10.0
+            + (tax_fit_score / 10.0) * 10.0
+            + (simplicity_score / 10.0) * 10.0
+        )
+        weighted_candidates.append(
+            {
+                "symbol": candidate["symbol"],
+                "instrument_type": candidate["instrument_type"],
+                "role": candidate["role"],
+                "primary_path_eligible": candidate["primary_path_eligible"],
+                "score": round(total_score, 1),
+                "score_breakdown": {
+                    "regime_fit": round(regime_fit, 1),
+                    "convexity_quality": round(convexity_quality, 1),
+                    "carry_drag_score": round(carry_score, 1),
+                    "liquidity_score": round(liquidity_score, 1),
+                    "tax_location_fit_score": round(tax_fit_score, 1),
+                    "implementation_simplicity_score": round(simplicity_score, 1),
+                },
+                "market_snapshot": quote_map.get(candidate["symbol"]),
+                "reasons": _summarize_candidate_reasons(
+                    regime_fit=regime_fit,
+                    convexity_quality=convexity_quality,
+                    carry_score=carry_score,
+                    simplicity_score=simplicity_score,
+                ),
+            }
+        )
+
+    options_candidates: list[dict[str, Any]] = []
+    allow_option_candidates = (
+        bool(allow_options)
+        and _OPTION_CAPABILITY_LEVELS.get(resolved_options_capability, 0)
+        >= _OPTION_CAPABILITY_LEVELS["vertical_spreads"]
+    )
+    if allow_option_candidates:
+        for template_name, long_otm, short_otm in (
+            ("SPY_90D_10_25_OTM_PUT_SPREAD", 0.10, 0.25),
+            ("SPY_90D_15_30_OTM_PUT_SPREAD", 0.15, 0.30),
+        ):
+            estimate = await _estimate_spy_put_spread(
+                target_days=90, long_otm=long_otm, short_otm=short_otm
+            )
+            if estimate is None:
+                warnings.append(f"Could not price options template {template_name} from yfinance")
+                continue
+            regime_fit = 7.5 if regime_label == "inflationary" else 9.0 if regime_label == "deflationary" else 8.5
+            convexity_quality = 10.0
+            carry_score = max(1.5, 7.0 - (estimate["net_debit_pct_spot"] * 20.0))
+            liquidity_score = 8.5 if estimate["min_open_interest"] >= 500 else 6.5
+            tax_fit_score = 4.0
+            simplicity_score = 2.0
+            total_score = (
+                (regime_fit / 10.0) * 30.0
+                + (convexity_quality / 10.0) * 25.0
+                + (carry_score / 10.0) * 15.0
+                + (liquidity_score / 10.0) * 10.0
+                + (tax_fit_score / 10.0) * 10.0
+                + (simplicity_score / 10.0) * 10.0
+            )
+            options_candidates.append(
+                {
+                    "symbol": template_name,
+                    "instrument_type": "options",
+                    "role": "tail hedge",
+                    "primary_path_eligible": False,
+                    "score": round(total_score, 1),
+                    "score_breakdown": {
+                        "regime_fit": round(regime_fit, 1),
+                        "convexity_quality": round(convexity_quality, 1),
+                        "carry_drag_score": round(carry_score, 1),
+                        "liquidity_score": round(liquidity_score, 1),
+                        "tax_location_fit_score": round(tax_fit_score, 1),
+                        "implementation_simplicity_score": round(simplicity_score, 1),
+                    },
+                    "market_snapshot": estimate,
+                    "reasons": _summarize_candidate_reasons(
+                        regime_fit=regime_fit,
+                        convexity_quality=convexity_quality,
+                        carry_score=carry_score,
+                        simplicity_score=simplicity_score,
+                    ),
+                }
+            )
+    elif allow_options:
+        warnings.append(
+            "Options were requested but options_capability does not permit vertical spreads; excluding options candidates"
+        )
+
+    ranked = sorted(
+        [*weighted_candidates, *options_candidates],
+        key=lambda candidate: candidate["score"],
+        reverse=True,
+    )
+    primary_candidates = [candidate for candidate in ranked if candidate.get("primary_path_eligible")]
+
+    return {
+        "ok": True,
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "scope_wrapper": scope_wrapper,
+        "target_convex_add_pct": round(float(target_convex_add_pct or 0.0), 4),
+        "target_convex_add_value": round(float(target_convex_add_value or 0.0), 2),
+        "allow_options": bool(allow_options),
+        "options_capability": resolved_options_capability,
+        "regime_context": regime_context,
+        "warnings": warnings,
+        "ranked_candidates": ranked,
+        "primary_path_shortlist": primary_candidates[:3],
+        "advanced_alternatives": [candidate for candidate in ranked if not candidate.get("primary_path_eligible")][:3],
+    }
+
+
+@server.tool()
+async def compute_market_temperature(
+    vix_lookback_years: int = 5,
+    cape_value: float | None = None,
+    cape_long_term_median: float = 17.0,
+) -> dict[str, Any]:
+    """Compute a strict market-temperature composite from VIX, CAPE, credit spreads, and equity risk premium."""
+    started_at = time.monotonic()
+    api_key = os.getenv("FRED_API_KEY", "").strip()
+    components: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    missing_components: list[str] = []
+    component_sources: dict[str, str] = {}
+    component_staleness_days: dict[str, int | None] = {}
+
+    # 1. VIX percentile
+    try:
+        vix_ticker = yf.Ticker("^VIX")
+        vix_hist = vix_ticker.history(period=f"{vix_lookback_years}y", interval="1d")
+        if not vix_hist.empty and "Close" in vix_hist.columns:
+            vix_values = vix_hist["Close"].dropna().tolist()
+            current_vix = vix_values[-1] if vix_values else 20.0
+            vix_score = _percentile_rank(vix_values, current_vix)
+            components.append({
+                "name": "vix_percentile",
+                "value": round(current_vix, 2),
+                "score": round(vix_score, 1),
+                "description": f"VIX {current_vix:.1f} at {vix_score:.0f}th percentile vs {vix_lookback_years}yr history",
+                "source": "yfinance",
+                "observation_date": datetime.now(timezone.utc).date().isoformat(),
+                "staleness_days": 0,
+            })
+            component_sources["vix_percentile"] = "yfinance"
+            component_staleness_days["vix_percentile"] = 0
+        else:
+            warnings.append("VIX history unavailable")
+            missing_components.append("vix_percentile")
+    except Exception as exc:
+        warnings.append(f"VIX fetch failed: {exc}")
+        missing_components.append("vix_percentile")
+
+    # 2. Strict CAPE / Shiller PE
+    effective_cape = None
+    cape_payload = None
+    if cape_value is not None and cape_value > 0:
+        effective_cape = float(cape_value)
+        cape_payload = {
+            "provider": "input_override",
+            "observation_date": None,
+            "staleness_days": None,
+            "warnings": [],
+        }
+    else:
+        cape_payload = await _fetch_shiller_cape_payload(provider="auto")
+        if cape_payload.get("ok") is True:
+            effective_cape = _coerce_float(cape_payload.get("value"))
+            warnings.extend(cape_payload.get("warnings", []))
+        else:
+            warnings.append(cape_payload.get("message", "Strict CAPE unavailable"))
+
+    if effective_cape is not None:
+        cape_ratio = effective_cape / cape_long_term_median
+        cape_score = min(100.0, max(0.0, (cape_ratio - 0.5) * 66.67))
+        components.append({
+            "name": "cape_percentile",
+            "value": round(effective_cape, 1),
+            "score": round(cape_score, 1),
+            "description": f"CAPE {effective_cape:.1f} vs median {cape_long_term_median} (ratio {cape_ratio:.2f})",
+            "source": cape_payload.get("provider"),
+            "observation_date": cape_payload.get("observation_date"),
+            "staleness_days": cape_payload.get("staleness_days"),
+        })
+        component_sources["cape_percentile"] = str(cape_payload.get("provider", "unknown"))
+        component_staleness_days["cape_percentile"] = cape_payload.get("staleness_days")
+    else:
+        missing_components.append("cape_percentile")
+        warnings.append("Strict CAPE value unavailable")
+
+    # 3. Credit spread (FRED BAMLH0A0HYM2)
+    if api_key:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                fred_data = await _fetch_fred_observations(
+                    client, api_key, "BAMLH0A0HYM2",
+                    days_back=365 * 5, limit=2000,
+                )
+            obs = fred_data.get("observations", [])
+            if obs:
+                spread_values = [o["value"] for o in obs]
+                current_spread = spread_values[-1]
+                # Invert: tight spreads = hot market (high score), wide spreads = cold
+                raw_pctile = _percentile_rank(spread_values, current_spread)
+                credit_score = 100.0 - raw_pctile  # Invert so tight spreads → high temperature
+                components.append({
+                    "name": "credit_spread",
+                    "value": round(current_spread, 2),
+                    "score": round(credit_score, 1),
+                    "description": f"HY OAS {current_spread:.0f}bp at {raw_pctile:.0f}th pctile (inverted: tighter = hotter)",
+                    "source": "fred:BAMLH0A0HYM2",
+                    "observation_date": fred_data.get("latest_observation_date"),
+                    "staleness_days": None,
+                })
+                latest_date = _parse_iso_date(f"{fred_data.get('latest_observation_date')}T00:00:00+00:00")
+                credit_staleness = (
+                    max(0, (datetime.now(timezone.utc).date() - latest_date.date()).days)
+                    if latest_date is not None
+                    else None
+                )
+                component_sources["credit_spread"] = "fred:BAMLH0A0HYM2"
+                component_staleness_days["credit_spread"] = credit_staleness
+                components[-1]["staleness_days"] = credit_staleness
+            else:
+                warnings.append("FRED BAMLH0A0HYM2 returned no observations")
+                missing_components.append("credit_spread")
+        except Exception as exc:
+            warnings.append(f"Credit spread fetch failed: {exc}")
+            missing_components.append("credit_spread")
+    else:
+        warnings.append("FRED_API_KEY not configured — credit spread component skipped")
+        missing_components.append("credit_spread")
+
+    # 4. Equity risk premium
+    erp = None
+    try:
+        earnings_yield = None
+        real_risk_free = None
+
+        if effective_cape and effective_cape > 0:
+            earnings_yield = 1.0 / effective_cape
+
+        if api_key:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                dgs10 = await _fetch_fred_observations(client, api_key, "DGS10", days_back=30, limit=10)
+                cpi = await _fetch_fred_observations(client, api_key, "CPIAUCSL", days_back=400, limit=15)
+
+            dgs10_obs = dgs10.get("observations", [])
+            cpi_obs = cpi.get("observations", [])
+
+            if dgs10_obs and len(cpi_obs) >= 2:
+                nominal_10y = dgs10_obs[-1]["value"] / 100.0
+                cpi_latest = cpi_obs[-1]["value"]
+                cpi_prior = cpi_obs[-13]["value"] if len(cpi_obs) >= 14 else cpi_obs[0]["value"]
+                yoy_cpi = (cpi_latest - cpi_prior) / cpi_prior if cpi_prior > 0 else 0.03
+                real_risk_free = nominal_10y - yoy_cpi
+
+        if earnings_yield is not None and real_risk_free is not None:
+            erp = earnings_yield - real_risk_free
+            erp_score = min(100.0, max(0.0, (0.06 - erp) / 0.06 * 100.0))
+            dgs10_latest = dgs10.get("latest_observation_date") if api_key else None
+            cpi_latest_date = cpi.get("latest_observation_date") if api_key else None
+            latest_reference = cpi_latest_date or dgs10_latest
+            reference_dt = _parse_iso_date(f"{latest_reference}T00:00:00+00:00") if latest_reference else None
+            erp_staleness = (
+                max(0, (datetime.now(timezone.utc).date() - reference_dt.date()).days)
+                if reference_dt is not None
+                else None
+            )
+            components.append({
+                "name": "equity_risk_premium",
+                "value": round(erp, 4),
+                "score": round(erp_score, 1),
+                "description": f"ERP {erp:.2%} (earnings yield {earnings_yield:.2%} - real Rf {real_risk_free:.2%})",
+                "source": "derived:strict_cape+fred",
+                "observation_date": latest_reference,
+                "staleness_days": erp_staleness,
+            })
+            component_sources["equity_risk_premium"] = "derived:strict_cape+fred"
+            component_staleness_days["equity_risk_premium"] = erp_staleness
+        else:
+            warnings.append("Equity risk premium unavailable — need CAPE + FRED data")
+            missing_components.append("equity_risk_premium")
+    except Exception as exc:
+        warnings.append(f"ERP computation failed: {exc}")
+        missing_components.append("equity_risk_premium")
+
+    missing_components = sorted(set(missing_components))
+    partial_score = round(sum(c["score"] for c in components) / len(components), 1) if components else None
+    status = "complete" if not missing_components else "incomplete"
+    composite = None
+    label = None
+    posture = None
+    if status == "complete" and components:
+        composite = partial_score
+        if composite is not None and composite >= 85:
+            label = "extreme_heat"
+            posture = "Defensive: raise cash, raise quality, reduce leverage"
+        elif composite is not None and composite >= 70:
+            label = "hot"
+            posture = "Cautious: trim marginal positions, build cash buffer"
+        elif composite is not None and composite >= 30:
+            label = "normal"
+            posture = "Neutral: maintain current allocation, rebalance on drift"
+        else:
+            label = "cold"
+            posture = "Opportunistic: lean into risk, deploy cash into equities"
+
+    elapsed = round(time.monotonic() - started_at, 3)
+    return {
+        "ok": True,
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "status": status,
+        "temperature": {
+            "score": composite,
+            "label": label,
+            "posture": posture,
+        },
+        "components": components,
+        "thresholds": {"cold": "<30", "normal": "30-70", "hot": "70-85", "extreme_heat": ">85"},
+        "warnings": warnings,
+        "missing_components": missing_components,
+        "component_sources": component_sources,
+        "component_staleness_days": component_staleness_days,
+        "diagnostics": {
+            "elapsed_seconds": elapsed,
+            "components_available": len(components),
+            "partial_score": partial_score,
+            "strict_cape_required": True,
+        },
+    }
+
+
 if __name__ == "__main__":
-    server.run(transport="stdio", show_banner=False)
+    server.run(transport="stdio")

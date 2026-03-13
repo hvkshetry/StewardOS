@@ -21,6 +21,14 @@ mcp = FastMCP(
 )
 
 
+def _ok_response(payload):
+    return {"status": "ok", "errors": [], "data": payload}
+
+
+def _error_response(message: str, *, code: str):
+    return {"status": "error", "errors": [{"code": code, "message": message}], "data": None}
+
+
 def _normalize_token(token: str) -> str:
     token = token.strip()
     if token.lower().startswith("bearer "):
@@ -52,7 +60,7 @@ async def _login() -> None:
         _token = _normalize_token(data.get("token", ""))
 
 
-async def _request(method: str, path: str, **kwargs) -> dict | list | str:
+async def _request(method: str, path: str, **kwargs) -> dict:
     """Execute an HTTP request with auto-login and 401 retry."""
     global _token
 
@@ -60,7 +68,7 @@ async def _request(method: str, path: str, **kwargs) -> dict | list | str:
         try:
             await _login()
         except (httpx.HTTPStatusError, httpx.RequestError) as exc:
-            return f"Login failed: {exc}"
+            return _error_response(f"Login failed: {exc}", code="login_failed")
 
     try:
         async with _client() as client:
@@ -71,22 +79,25 @@ async def _request(method: str, path: str, **kwargs) -> dict | list | str:
                 try:
                     await _login()
                 except (httpx.HTTPStatusError, httpx.RequestError) as exc:
-                    return f"Re-login failed: {exc}"
+                    return _error_response(f"Re-login failed: {exc}", code="relogin_failed")
                 # Rebuild client with fresh token
                 async with _client() as retry_client:
                     resp = await retry_client.request(method, path, **kwargs)
 
             resp.raise_for_status()
             if resp.status_code == 204:
-                return {"status": "success"}
+                return _ok_response({"status": "success"})
             ct = resp.headers.get("content-type", "")
             if "application/json" in ct:
-                return resp.json()
-            return resp.text
+                return _ok_response(resp.json())
+            return _ok_response(resp.text)
     except httpx.HTTPStatusError as exc:
-        return f"HTTP {exc.response.status_code}: {exc.response.text}"
+        return _error_response(
+            f"HTTP {exc.response.status_code}: {exc.response.text}",
+            code="http_error",
+        )
     except httpx.RequestError as exc:
-        return f"Request failed: {exc}"
+        return _error_response(f"Request failed: {exc}", code="request_failed")
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,27 @@
+[project]
+name = "portfolio-analytics-mcp"
+version = "2.0.0"
+description = "Portfolio analytics MCP server — risk, drift, and TLH using Ghostfolio positions"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.0.0",
+    "httpx>=0.27.0",
+    "numpy>=1.26.0",
+    "pandas>=2.1.0",
+    "pydantic>=2.0",
+    "python-dotenv>=1.0.0",
+    "scipy>=1.11.0",
+    "stewardos-lib",
+    "yfinance>=0.2.36",
+]
+
+[tool.uv.sources]
+stewardos-lib = { path = "../../lib", editable = true }
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["error"]
