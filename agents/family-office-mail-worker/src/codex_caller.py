@@ -6,7 +6,7 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from src.config import settings
 from src.models import AgentResponse
@@ -15,10 +15,12 @@ logger = logging.getLogger(__name__)
 
 
 def parse_codex_jsonl(output: str) -> dict:
-    """Parse Codex JSONL output into message text and session id."""
+    """Parse Codex JSONL output into message text, session id, and tool events."""
     lines = output.strip().split("\n")
     text_chunks = []
     session_id = None
+    completed_items: list[dict[str, Any]] = []
+    mcp_tool_calls: list[dict[str, Any]] = []
 
     for line in lines:
         if not line.strip():
@@ -33,12 +35,29 @@ def parse_codex_jsonl(output: str) -> dict:
             session_id = data.get("thread_id") or session_id
         elif event_type == "item.completed":
             item = data.get("item", {})
+            if isinstance(item, dict):
+                completed_items.append(item)
             if item.get("type") == "agent_message":
                 text_chunks.append(item.get("text", ""))
+        elif event_type == "mcp_tool_call_end":
+            invocation = data.get("invocation", {})
+            mcp_tool_calls.append(
+                {
+                    "server": invocation.get("server"),
+                    "tool": invocation.get("tool"),
+                    "arguments": invocation.get("arguments", {}),
+                    "result": data.get("result"),
+                }
+            )
         elif event_type == "error":
             logger.warning("Codex error event: %s", data.get("message", ""))
 
-    return {"text": "\n".join(text_chunks).strip(), "session_id": session_id}
+    return {
+        "text": "\n".join(text_chunks).strip(),
+        "session_id": session_id,
+        "completed_items": completed_items,
+        "mcp_tool_calls": mcp_tool_calls,
+    }
 
 
 async def call_codex(
@@ -136,7 +155,12 @@ async def call_codex(
         return AgentResponse(
             success=True,
             response_text=parsed["text"],
-            metadata={"session_id": parsed.get("session_id"), "backend": "codex"},
+            metadata={
+                "session_id": parsed.get("session_id"),
+                "backend": "codex",
+                "completed_items": parsed.get("completed_items", []),
+                "mcp_tool_calls": parsed.get("mcp_tool_calls", []),
+            },
         )
     except Exception as exc:
         logger.error("Codex call error: %s", exc, exc_info=True)

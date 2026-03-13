@@ -1,11 +1,11 @@
 """Async SQLite session store for conversation continuity and Gmail watch state."""
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Column, String, DateTime, BigInteger, select
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy import BigInteger, Column, DateTime, String, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import declarative_base
 
 from src.config import settings
@@ -67,8 +67,7 @@ class SessionStore:
     async def get_session(cls, thread_id: str) -> Optional[str]:
         """Get existing Codex conversation_id for a Gmail thread.
 
-        Returns the conversation_id if a recent session exists (within 30 days),
-        None otherwise.
+        Returns the conversation_id if a session exists, None otherwise.
         """
         await cls.initialize()
 
@@ -78,8 +77,7 @@ class SessionStore:
             email_session = result.scalar_one_or_none()
 
             if email_session:
-                if datetime.utcnow() - email_session.updated_at < timedelta(days=30):
-                    return email_session.conversation_id
+                return email_session.conversation_id
 
         return None
 

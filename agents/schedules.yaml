@@ -1,0 +1,88 @@
+version: 1
+timezone: America/New_York
+
+jobs:
+  # ── Mail Worker ──────────────────────────────────────────────
+  - id: io_preopen_monday
+    agent: family-office-mail-worker
+    persona: io
+    cron: "0 6 * * MON"
+    delivery_mode: email
+    recipients:
+      - principal@example.com
+      - spouse@example.com
+    prompt_template: io_preopen
+    enabled: true
+
+  - id: io_postclose_friday
+    agent: family-office-mail-worker
+    persona: io
+    cron: "0 18 * * FRI"
+    delivery_mode: email
+    recipients:
+      - principal@example.com
+      - spouse@example.com
+    prompt_template: io_postclose
+    enabled: true
+
+  - id: cos_weekly_priorities
+    agent: family-office-mail-worker
+    persona: cos
+    cron: "0 7 * * MON"
+    delivery_mode: email
+    recipients:
+      - principal@example.com
+      - spouse@example.com
+      - child1@example.com
+      - child2@example.com
+    prompt_template: cos_weekly
+    enabled: true
+
+  - id: wellness_hydrate_nightly
+    agent: family-office-mail-worker
+    persona: wellness
+    cron: "15 2 * * *"
+    delivery_mode: maintenance
+    recipients: []
+    prompt_template: wellness_hydrate_nightly
+    enabled: true
+
+  - id: wellness_weekly_brief
+    agent: family-office-mail-worker
+    persona: wellness
+    cron: "30 18 * * SUN"
+    delivery_mode: email
+    recipients:
+      - principal@example.com
+      - spouse@example.com
+    prompt_template: wellness_weekly
+    enabled: true
+
+  # ── Brief Agent ──────────────────────────────────────────────
+  - id: daily_brief
+    agent: family-brief-agent
+    persona: family
+    cron: "30 6 * * *"
+    prompt_template: daily_brief
+    enabled: true
+
+  - id: pre_meeting_brief
+    agent: family-brief-agent
+    persona: personal-admin
+    interval_minutes: 10
+    prompt_template: pre_meeting
+    enabled: true
+
+  - id: weekly_digest
+    agent: family-brief-agent
+    persona: personal-finance
+    cron: "0 20 * * SUN"
+    prompt_template: weekly_digest
+    enabled: true
+
+  - id: gmail_watch_renewal
+    agent: family-brief-agent
+    persona: null
+    cron: "0 2 * * *"
+    prompt_template: null
+    enabled: true

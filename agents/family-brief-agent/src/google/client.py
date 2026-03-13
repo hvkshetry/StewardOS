@@ -10,7 +10,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
 
-from src.google.auth import get_gmail_service, get_calendar_service
+from src.google.auth import get_calendar_service, get_gmail_service
 
 logger = logging.getLogger(__name__)
 

@@ -158,11 +158,23 @@ def send_thread_reply(
     return result
 
 
-def setup_gmail_watch(topic_name: str) -> dict:
-    """Create/renew Gmail Pub/Sub watch for inbox notifications."""
+def setup_gmail_watch(user_email: str, topic_name: str) -> dict:
+    """Create/renew Gmail Pub/Sub watch for inbox notifications.
+
+    Args:
+        user_email: The Gmail address (used for logging; API uses 'me').
+        topic_name: Full Pub/Sub topic name.
+    """
     service = get_gmail_service()
     body = {"topicName": topic_name, "labelIds": ["INBOX"]}
-    return service.users().watch(userId="me", body=body).execute()
+    result = service.users().watch(userId="me", body=body).execute()
+    logger.info(
+        "Gmail watch set up for %s: historyId=%s, expiration=%s",
+        user_email,
+        result.get("historyId"),
+        result.get("expiration"),
+    )
+    return result
 
 
 def get_profile_history_id() -> int:

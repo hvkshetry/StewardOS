@@ -1,20 +1,28 @@
 """APScheduler-based scheduled tasks for family brief agent.
 
-Jobs:
-    1. daily_brief_job — 6:30 AM ET: morning briefing with calendar, meals, activities
-    2. pre_meeting_brief_job — every 10 min: context briefs for upcoming meetings
-    3. weekly_digest_job — Sunday 8 PM ET: spending, meals, activities, week ahead
-    4. gmail_watch_renewal_job — 2 AM ET daily: renew Gmail push notification watches
+Jobs are loaded declaratively from ``agents/schedules.yaml`` via the shared
+schedule_loader.  Gmail watch renewal uses the shared gmail_watch module.
 """
 
+# ruff: noqa: E402
+
 import logging
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
+
+# Add agents/ parent dir so ``from lib.*`` imports resolve.
+_AGENTS_DIR = str(Path(__file__).resolve().parent.parent.parent)
+if _AGENTS_DIR not in sys.path:
+    sys.path.insert(0, _AGENTS_DIR)
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
+from lib.gmail_watch import ensure_watch_if_needed
+from lib.schedule_loader import load_schedules
 
 from src.config import settings
 
@@ -22,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 _TZ = ZoneInfo(settings.briefing_timezone)
 _scheduler: Optional[AsyncIOScheduler] = None
+
+# Map schedule entry IDs to the async job functions defined below.
+_JOB_FUNCS: dict[str, object] = {}
 
 
 def _now_local_str() -> str:
@@ -44,20 +55,11 @@ def _family_emails_str() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Job 1: Daily Brief (CronTrigger — 6:30 AM ET)
+# Job 1: Daily Brief
 # ---------------------------------------------------------------------------
 
 async def daily_brief_job():
-    """Send a morning briefing to all family members.
-
-    Calls Codex with the family persona to gather:
-    - Today's calendar events
-    - Today's meal plan from Mealie
-    - Weather (included in prompt — Codex has web tools)
-    - Kid activities for today
-    - Any reminders
-    Then composes and sends a daily brief email.
-    """
+    """Send a morning briefing to all family members."""
     try:
         from src.codex_caller import call_codex
 
@@ -109,16 +111,11 @@ Keep it concise — the family should scan it in under 2 minutes.""",
 
 
 # ---------------------------------------------------------------------------
-# Job 2: Pre-Meeting Brief (IntervalTrigger — every 10 min)
+# Job 2: Pre-Meeting Brief
 # ---------------------------------------------------------------------------
 
 async def pre_meeting_brief_job():
-    """Check for upcoming meetings and send context briefs.
-
-    Polls the calendar for meetings starting within the next 60 minutes.
-    For each meeting with attendees, generates a context brief using the
-    personal-admin persona and sends it to the meeting organizer's email.
-    """
+    """Check for upcoming meetings and send context briefs."""
     try:
         from src.codex_caller import call_codex
         from src.google.client import list_calendar_events
@@ -138,15 +135,12 @@ async def pre_meeting_brief_job():
             return
 
         for event in events:
-            event_id = event.get("id", "")
             summary = event.get("summary", "(No subject)")
             attendees = event.get("attendees", [])
 
-            # Skip events without attendees (focus blocks, placeholders)
             if not attendees:
                 continue
 
-            # Skip all-day events
             if "date" in event.get("start", {}):
                 continue
 
@@ -162,9 +156,7 @@ async def pre_meeting_brief_job():
                 attendee_lines.append(f"  - {name} <{email}>")
             attendees_str = "\n".join(attendee_lines) if attendee_lines else "  (none listed)"
 
-            # Determine the primary recipient for the brief
             primary_recipient = settings.family_emails[0] if settings.family_emails else organizer
-
             now_str = _now_local_str()
 
             logger.info(f"Sending pre-meeting brief for '{summary}'")
@@ -209,18 +201,11 @@ Keep it actionable — focus on what is needed going into this meeting.""",
 
 
 # ---------------------------------------------------------------------------
-# Job 3: Weekly Digest (CronTrigger — Sunday 8 PM ET)
+# Job 3: Weekly Digest
 # ---------------------------------------------------------------------------
 
 async def weekly_digest_job():
-    """Send a weekly family digest on Sunday evening.
-
-    Calls Codex with the personal-finance persona to compile:
-    - Spending summary from Actual Budget
-    - Meal plan adherence from Mealie
-    - Activities completed this week
-    - Upcoming week preview
-    """
+    """Send a weekly family digest on Sunday evening."""
     try:
         from src.codex_caller import call_codex
 
@@ -229,7 +214,6 @@ async def weekly_digest_job():
         now_str = _now_local_str()
         recipients = _family_emails_str()
 
-        # Calculate week boundaries
         now = datetime.now(_TZ)
         week_start = (now - timedelta(days=now.weekday())).replace(
             hour=0, minute=0, second=0, microsecond=0
@@ -277,50 +261,38 @@ Keep it high-level — this is a strategic family summary, not a daily log.""",
 
 
 # ---------------------------------------------------------------------------
-# Job 4: Gmail Watch Renewal (CronTrigger — 2 AM ET daily)
+# Job 4: Gmail Watch Renewal (uses shared lib)
 # ---------------------------------------------------------------------------
 
 async def gmail_watch_renewal_job():
-    """Renew Gmail push notification watches for all family member emails.
-
-    Gmail watches expire after ~7 days. This job runs daily to keep them
-    active. It also updates the watch state (historyId, expiration) in SQLite.
-    """
+    """Renew Gmail push notification watches via shared gmail_watch module."""
     try:
         from src.google.client import setup_gmail_watch
         from src.session_store import SessionStore
 
         logger.info("Running Gmail watch renewal job")
 
-        topic = settings.google_pubsub_topic
-        if not topic:
-            logger.warning("GOOGLE_PUBSUB_TOPIC not set — skipping watch renewal")
-            return
-
-        # Renew watch for the agent's own mailbox
-        emails_to_watch = [settings.agent_email] if settings.agent_email else []
-
-        for email in emails_to_watch:
-            try:
-                result = setup_gmail_watch(email, topic)
-                history_id = int(result.get("historyId", 0))
-                expiration = int(result.get("expiration", 0))
-
-                await SessionStore.update_watch_state(
-                    email=email,
-                    history_id=history_id,
-                    expiration=expiration,
-                )
-
-                logger.info(
-                    f"Gmail watch renewed for {email}: "
-                    f"historyId={history_id}, expiration={expiration}"
-                )
-            except Exception as e:
-                logger.error(f"Failed to renew Gmail watch for {email}: {e}")
+        await ensure_watch_if_needed(
+            agent_email=settings.agent_email,
+            pubsub_topic=settings.google_pubsub_topic,
+            session_store=SessionStore,
+            setup_gmail_watch=setup_gmail_watch,
+        )
 
     except Exception as e:
         logger.error(f"Gmail watch renewal job error: {e}", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# Job dispatch map: prompt_template or id -> async job function
+# ---------------------------------------------------------------------------
+
+_JOB_FUNCS = {
+    "daily_brief": daily_brief_job,
+    "pre_meeting": pre_meeting_brief_job,
+    "weekly_digest": weekly_digest_job,
+    "gmail_watch_renewal": gmail_watch_renewal_job,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +300,7 @@ async def gmail_watch_renewal_job():
 # ---------------------------------------------------------------------------
 
 def start_scheduler():
-    """Create and start the APScheduler with all 4 scheduled jobs."""
+    """Create and start the APScheduler from declarative schedules.yaml."""
     global _scheduler
 
     if _scheduler is not None:
@@ -336,70 +308,47 @@ def start_scheduler():
         return
 
     _scheduler = AsyncIOScheduler()
-
-    # Parse time settings
-    brief_hour, brief_minute = settings.briefing_time_local.split(":")
-    digest_hour, digest_minute = settings.digest_time_local.split(":")
     tz = settings.briefing_timezone
 
-    # Job 1: Daily brief — CronTrigger with timezone (handles DST)
-    _scheduler.add_job(
-        daily_brief_job,
-        CronTrigger(
-            hour=int(brief_hour),
-            minute=int(brief_minute),
-            timezone=tz,
-        ),
-        id="daily_brief",
-        name="Daily family morning briefing",
-        replace_existing=True,
-    )
+    schedules_path = settings.schedules_path or None
+    try:
+        entries = load_schedules("family-brief-agent", path=schedules_path)
+    except Exception as exc:
+        logger.error("Failed to load schedules: %s", exc)
+        return
 
-    # Job 2: Pre-meeting brief poll — IntervalTrigger, run immediately on startup
-    _scheduler.add_job(
-        pre_meeting_brief_job,
-        IntervalTrigger(minutes=settings.pre_meeting_check_minutes),
-        id="pre_meeting_brief",
-        name="Pre-meeting briefing poll",
-        replace_existing=True,
-        next_run_time=datetime.now(timezone.utc),
-    )
+    for entry in entries:
+        # Resolve job function by prompt_template first, then by entry id
+        job_func = _JOB_FUNCS.get(entry.prompt_template or "") or _JOB_FUNCS.get(entry.id)
+        if job_func is None:
+            logger.warning("No job function for schedule entry '%s' (template=%s), skipping",
+                           entry.id, entry.prompt_template)
+            continue
 
-    # Job 3: Weekly digest — CronTrigger on configured weekday
-    _scheduler.add_job(
-        weekly_digest_job,
-        CronTrigger(
-            day_of_week=settings.digest_weekday,
-            hour=int(digest_hour),
-            minute=int(digest_minute),
-            timezone=tz,
-        ),
-        id="weekly_digest",
-        name="Weekly family digest",
-        replace_existing=True,
-    )
-
-    # Job 4: Gmail watch renewal — daily at 2 AM
-    _scheduler.add_job(
-        gmail_watch_renewal_job,
-        CronTrigger(
-            hour=2,
-            minute=0,
-            timezone=tz,
-        ),
-        id="gmail_watch_renewal",
-        name="Gmail watch renewal",
-        replace_existing=True,
-    )
+        if entry.cron:
+            trigger = CronTrigger.from_crontab(entry.cron, timezone=tz)
+            _scheduler.add_job(
+                job_func,
+                trigger,
+                id=entry.id,
+                name=entry.id,
+                replace_existing=True,
+            )
+        elif entry.interval_minutes:
+            _scheduler.add_job(
+                job_func,
+                IntervalTrigger(minutes=entry.interval_minutes),
+                id=entry.id,
+                name=entry.id,
+                replace_existing=True,
+                next_run_time=datetime.now(timezone.utc),
+            )
 
     _scheduler.start()
-    logger.info(
-        f"Scheduler started: "
-        f"daily brief at {settings.briefing_time_local} {tz}, "
-        f"pre-meeting poll every {settings.pre_meeting_check_minutes}min, "
-        f"weekly digest day={settings.digest_weekday} at {settings.digest_time_local}, "
-        f"Gmail watch renewal at 02:00 {tz}"
-    )
+
+    job_summary = ", ".join(f"{e.id}({'every ' + str(e.interval_minutes) + 'min' if e.interval_minutes else e.cron})"
+                           for e in entries)
+    logger.info("Scheduler started (%s): %s", tz, job_summary)
 
 
 def stop_scheduler():

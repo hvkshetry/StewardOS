@@ -17,5 +17,12 @@ class Settings(BaseSettings):
     worker_shared_secret: str = ""
     log_level: str = "INFO"
 
+    # Pub/Sub JWT verification
+    pubsub_audience: str = ""
+    pubsub_service_account_email: str = ""
+
+    # Plane webhook verification
+    plane_webhook_secret: str = ""
+
 
 settings = Settings()

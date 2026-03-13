@@ -1,8 +1,7 @@
-"""Gmail Pub/Sub notification parser.
+"""Shared Pub/Sub message parsing and validation.
 
-Gmail push notifications arrive via Google Cloud Pub/Sub. Each notification
-contains a base64-encoded JSON payload with the user's email address and
-the latest historyId. This module parses and validates those payloads.
+Extracted from agents/family-office-mail-worker/src/google/pubsub.py so both
+the ingress and worker can share the same validation logic.
 """
 
 import base64
@@ -16,24 +15,11 @@ logger = logging.getLogger(__name__)
 def parse_pubsub_notification(payload: dict) -> Optional[dict]:
     """Parse a Gmail Pub/Sub push notification.
 
-    Gmail Pub/Sub notifications have this structure:
-    {
-        "message": {
-            "data": "<base64-encoded JSON>",
-            "messageId": "...",
-            "publishTime": "..."
-        },
-        "subscription": "projects/.../subscriptions/..."
-    }
-
     The base64-decoded data contains:
     {
-        "emailAddress": "user@example.com",
+        "emailAddress": "user@gmail.com",
         "historyId": 12345
     }
-
-    Args:
-        payload: The raw Pub/Sub push notification dict.
 
     Returns:
         Dict with emailAddress and historyId, or None if parsing fails.
@@ -46,7 +32,6 @@ def parse_pubsub_notification(payload: dict) -> Optional[dict]:
             logger.warning("Pub/Sub notification missing data field")
             return None
 
-        # Decode base64 data
         decoded = base64.urlsafe_b64decode(data_b64).decode("utf-8")
         data = json.loads(decoded)
 
@@ -55,13 +40,17 @@ def parse_pubsub_notification(payload: dict) -> Optional[dict]:
 
         if not email_address or not history_id:
             logger.warning(
-                f"Pub/Sub data missing required fields: "
-                f"emailAddress={email_address}, historyId={history_id}"
+                "Pub/Sub data missing required fields: "
+                "emailAddress=%s, historyId=%s",
+                email_address,
+                history_id,
             )
             return None
 
         logger.debug(
-            f"Parsed Pub/Sub notification: email={email_address}, historyId={history_id}"
+            "Parsed Pub/Sub notification: email=%s, historyId=%s",
+            email_address,
+            history_id,
         )
         return {
             "emailAddress": email_address,
@@ -69,7 +58,7 @@ def parse_pubsub_notification(payload: dict) -> Optional[dict]:
         }
 
     except (json.JSONDecodeError, ValueError, TypeError) as e:
-        logger.error(f"Failed to parse Pub/Sub notification: {e}")
+        logger.error("Failed to parse Pub/Sub notification: %s", e)
         return None
 
 
@@ -80,16 +69,6 @@ def validate_pubsub_message(payload: dict) -> bool:
     - Has a message field with data
     - Has a subscription field (confirms it came through Pub/Sub)
     - Data decodes to valid JSON with expected fields
-
-    Note: For production, also verify the Pub/Sub push endpoint uses HTTPS
-    and optionally validate the JWT bearer token in the Authorization header
-    using google.auth. This function covers structural validation only.
-
-    Args:
-        payload: The raw Pub/Sub push notification dict.
-
-    Returns:
-        True if the message passes validation, False otherwise.
     """
     if not isinstance(payload, dict):
         logger.warning("Pub/Sub payload is not a dict")
@@ -108,7 +87,6 @@ def validate_pubsub_message(payload: dict) -> bool:
         logger.warning("Pub/Sub payload missing 'subscription' field")
         return False
 
-    # Verify data is valid base64 and contains expected fields
     parsed = parse_pubsub_notification(payload)
     if parsed is None:
         return False

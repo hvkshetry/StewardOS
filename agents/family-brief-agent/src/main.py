@@ -7,12 +7,12 @@ Codex-only backend, 4 scheduled jobs.
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 
 from src.config import settings
 from src.models import IncomingEmail
-from src.session_store import SessionStore
 from src.scheduler import start_scheduler, stop_scheduler
+from src.session_store import SessionStore
 
 # Configure logging
 logging.basicConfig(

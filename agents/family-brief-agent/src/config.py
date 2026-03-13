@@ -33,15 +33,13 @@ class Settings(BaseSettings):
     family_emails: list[str] = []
 
     # Codex CLI
-    codex_model: str = "gpt-5.3-codex"
+    codex_model: str = "gpt-5.4"
+    codex_timeout_seconds: int = 3600
 
     # Scheduled tasks
-    briefing_time_local: str = "06:30"
     briefing_timezone: str = "America/New_York"
-    digest_weekday: int = 6  # Sunday (0=Mon ... 6=Sun)
-    digest_time_local: str = "20:00"
-    pre_meeting_check_minutes: int = 10
     pre_meeting_lead_minutes: int = 60
+    schedules_path: str = ""
 
     # Database
     database_url: str = "sqlite+aiosqlite:///./family_brief_agent.db"
@@ -50,9 +48,9 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # Codex agent config directories (persona-specific .codex/config.toml)
-    agent_config_dir_family: str = "agent-configs/chief-of-staff"
-    agent_config_dir_personal_finance: str = "agent-configs/household-comptroller"
-    agent_config_dir_personal_admin: str = "agent-configs/household-director"
+    agent_config_dir_family: str = "$STEWARDOS_ROOT/agent-configs/chief-of-staff"
+    agent_config_dir_personal_finance: str = "$STEWARDOS_ROOT/agent-configs/household-comptroller"
+    agent_config_dir_personal_admin: str = "$STEWARDOS_ROOT/agent-configs/household-director"
 
 
 settings = Settings()

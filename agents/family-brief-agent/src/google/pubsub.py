@@ -28,7 +28,7 @@ def parse_pubsub_notification(payload: dict) -> Optional[dict]:
 
     The base64-decoded data contains:
     {
-        "emailAddress": "user@example.com",
+        "emailAddress": "user@gmail.com",
         "historyId": 12345
     }
 

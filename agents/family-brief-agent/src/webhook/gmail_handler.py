@@ -11,12 +11,12 @@ Processes Gmail Pub/Sub push notifications by:
 import logging
 import time
 from collections import OrderedDict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from src.config import settings
+from src.google.client import get_email_detail, get_history
 from src.google.pubsub import parse_pubsub_notification
-from src.google.client import get_history, get_email_detail
 from src.models import IncomingEmail
 from src.session_store import SessionStore
 
@@ -183,7 +183,7 @@ async def process_gmail_webhook(
                 body=body,
                 message_id=message_id,
                 thread_id=thread_id or None,
-                received_at=datetime.utcnow(),
+                received_at=datetime.now(timezone.utc),
             )
 
     logger.debug("No family emails found in this notification batch")

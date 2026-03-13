@@ -133,16 +133,20 @@ async def call_codex(
 
         try:
             stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=300
+                process.communicate(), timeout=settings.codex_timeout_seconds
             )
         except asyncio.TimeoutError:
             process.kill()
             await process.wait()
-            logger.error(f"Codex exec timed out after 300s: {agent_config_dir}")
+            logger.error(
+                "Codex exec timed out after %ss: %s",
+                settings.codex_timeout_seconds,
+                agent_config_dir,
+            )
             return AgentResponse(
                 success=False,
                 response_text="",
-                error="Codex exec timed out after 300s",
+                error=f"Codex exec timed out after {settings.codex_timeout_seconds}s",
             )
 
         if process.returncode != 0:

@@ -2,49 +2,49 @@
 
 import logging
 import re
-import time
-from collections import OrderedDict
-from datetime import datetime
+from datetime import datetime, timezone
 
 from googleapiclient.errors import HttpError
+from lib.pubsub_validation import parse_pubsub_notification
 
 from src.config import settings
 from src.google.client import get_email_detail, get_history_pages
-from src.google.pubsub import parse_pubsub_notification
 from src.models import IncomingEmail
 from src.session_store import SessionStore
 
 logger = logging.getLogger(__name__)
 
-_recent_message_ids: OrderedDict[str, float] = OrderedDict()
-_DEDUP_MAX_SIZE = 200
-_DEDUP_TTL_SECONDS = 120
 _MAX_EMAIL_BODY_LENGTH = 10_000
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
-_agent_local, _, _agent_domain = settings.agent_email.partition("@")
 _ALIAS_RE = re.compile(
-    rf"^{re.escape(_agent_local)}(?:\+([a-z0-9._-]+))?@{re.escape(_agent_domain)}$"
+    rf"^{re.escape(settings.agent_email.partition('@')[0])}(?:\+([a-z0-9._-]+))?@{re.escape(settings.agent_email.partition('@')[2])}$"
 )
 
 
-def _is_duplicate(message_id: str) -> bool:
-    now = time.monotonic()
-    while _recent_message_ids:
-        oldest_key, oldest_time = next(iter(_recent_message_ids.items()))
-        if now - oldest_time > _DEDUP_TTL_SECONDS:
-            _recent_message_ids.pop(oldest_key)
-        else:
-            break
+def _is_missing_message_error(exc: Exception) -> bool:
+    """Return True when Gmail no longer has the history-referenced message."""
+    if not isinstance(exc, HttpError):
+        return False
 
-    if message_id in _recent_message_ids:
-        return True
+    status = getattr(exc, "status_code", None) or getattr(getattr(exc, "resp", None), "status", None)
+    if status != 404:
+        return False
 
-    _recent_message_ids[message_id] = now
-    while len(_recent_message_ids) > _DEDUP_MAX_SIZE:
-        _recent_message_ids.popitem(last=False)
-    return False
+    return "notfound" in str(exc).lower() or "requested entity was not found" in str(exc).lower()
+
+
+def _is_batch_scoped_message_error(exc: Exception) -> bool:
+    """Return True when the error likely affects the whole Gmail history batch."""
+    if not isinstance(exc, HttpError):
+        return False
+
+    status = getattr(exc, "status_code", None) or getattr(getattr(exc, "resp", None), "status", None)
+    if status is None:
+        return False
+
+    return status in {401, 403, 429} or int(status) >= 500
 
 
 def _extract_email_address(header: str) -> str:
@@ -87,15 +87,14 @@ def _select_alias(recipients: list[str]) -> str:
 async def process_gmail_webhook(
     payload: dict,
     allowed_senders: list[str],
-) -> list[IncomingEmail]:
+) -> dict:
     """Parse and process one Gmail Pub/Sub notification."""
     notification = parse_pubsub_notification(payload)
     if notification is None:
-        logger.warning("Failed to parse Gmail Pub/Sub notification")
-        return []
+        raise ValueError("invalid_gmail_notification")
 
     email_address = notification["emailAddress"]
-    new_history_id = notification["historyId"]
+    new_history_id = int(notification["historyId"])
 
     watch_state = await SessionStore.get_watch_state(email_address)
     if watch_state is None:
@@ -104,7 +103,12 @@ async def process_gmail_webhook(
             email_address,
         )
         await SessionStore.update_watch_state(email_address, new_history_id)
-        return []
+        return {
+            "email_address": email_address,
+            "history_id": new_history_id,
+            "emails": [],
+            "cursor_advanced": True,
+        }
 
     last_history_id = str(watch_state["history_id"])
 
@@ -115,33 +119,56 @@ async def process_gmail_webhook(
         if status == 404:
             logger.warning("History cursor expired; advancing to %s", new_history_id)
             await SessionStore.update_watch_state(email_address, new_history_id)
-            return []
+            return {
+                "email_address": email_address,
+                "history_id": new_history_id,
+                "emails": [],
+                "cursor_advanced": True,
+            }
         logger.error("Failed to fetch Gmail history: %s", exc)
-        await SessionStore.update_watch_state(email_address, new_history_id)
-        return []
+        raise
     except Exception as exc:
         logger.error("Failed to fetch Gmail history: %s", exc)
-        await SessionStore.update_watch_state(email_address, new_history_id)
-        return []
-
-    await SessionStore.update_watch_state(email_address, new_history_id)
+        raise
 
     if not history_records:
-        return []
+        return {
+            "email_address": email_address,
+            "history_id": new_history_id,
+            "emails": [],
+            "cursor_advanced": False,
+        }
 
     allowlist = {e.strip().lower() for e in allowed_senders}
     incoming: list[IncomingEmail] = []
+    seen_message_ids: set[str] = set()
+    warnings: list[str] = []
 
     for record in history_records:
         for entry in record.get("messagesAdded", []):
             message_id = entry.get("message", {}).get("id", "")
-            if not message_id or _is_duplicate(message_id):
+            if not message_id or message_id in seen_message_ids:
                 continue
+            seen_message_ids.add(message_id)
 
             try:
                 detail = get_email_detail(message_id)
             except Exception as exc:
+                if _is_missing_message_error(exc):
+                    logger.warning(
+                        "Skipping missing Gmail history message %s; it no longer exists.",
+                        message_id[:24],
+                    )
+                    continue
+                if _is_batch_scoped_message_error(exc):
+                    logger.error(
+                        "Aborting Gmail batch due to batch-scoped message detail failure %s: %s",
+                        message_id[:24],
+                        exc,
+                    )
+                    raise
                 logger.error("Failed fetching message %s: %s", message_id[:24], exc)
+                warnings.append(f"message_detail_failed:{message_id}")
                 continue
 
             sender_raw = detail.get("sender", "")
@@ -179,8 +206,14 @@ async def process_gmail_webhook(
                     in_reply_to_header=in_reply_to,
                     recipient_addresses=recipients,
                     target_alias=alias,
-                    received_at=datetime.utcnow(),
+                    received_at=datetime.now(timezone.utc),
                 )
             )
 
-    return incoming
+    return {
+        "email_address": email_address,
+        "history_id": new_history_id,
+        "emails": incoming,
+        "cursor_advanced": False,
+        "warnings": warnings,
+    }

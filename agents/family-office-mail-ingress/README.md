@@ -1,45 +1,71 @@
 # Family Office Mail Ingress
 
-`family-office-mail-ingress` is the lightweight webhook edge for Gmail Pub/Sub push events.
-
-## Why this service exists
-
-It isolates external webhook reception from heavier workflow execution. The ingress service quickly acknowledges requests and forwards validated payloads to the worker.
+Remote ingress service for home-server.
 
 ## What it does
+- Receives Gmail Pub/Sub push notifications at `POST /webhooks/gmail`
+- Acknowledges quickly
+- Forwards payloads to worker webhook URL with shared-secret header
+- Optionally verifies Pub/Sub push JWTs when `PUBSUB_AUDIENCE` is configured
 
-- Exposes `POST /webhooks/gmail`.
-- Parses/validates incoming Pub/Sub envelope.
-- Forwards payloads to worker endpoint with shared-secret header.
-- Returns fast acknowledgment to reduce webhook retry pressure.
+## Ports
+- Default bind: `127.0.0.1:8311`
 
-## Runtime defaults
-
-- Bind: `127.0.0.1:8311`
-- Worker default endpoint: `http://127.0.0.1:8312/internal/family-office/gmail`
-
-## Environment contract
-
-See `.env.example` for:
-
-- host/port,
-- worker target URL,
-- shared secret.
-
-## Setup
-
+## Setup on home-server
 ```bash
-cd agents/family-office-mail-ingress
+cd ~/personal/agents/family-office-mail-ingress
 python3 -m venv .venv
 .venv/bin/pip install -e .
 cp .env.example .env
 ```
 
+Set the ingress `.env` values:
+
+```bash
+SERVICE_HOST=127.0.0.1
+SERVICE_PORT=8311
+WORKER_WEBHOOK_URL=http://127.0.0.1:18312/internal/family-office/gmail
+WORKER_SHARED_SECRET=<same-value-as-worker>
+LOG_LEVEL=INFO
+PUBSUB_AUDIENCE=https://agent-mail.stewardos.example.com/webhooks/gmail
+PUBSUB_SERVICE_ACCOUNT_EMAIL=pubsub-push-ingress@stewardos-gcp-project.iam.gserviceaccount.com
+```
+
+`PUBSUB_AUDIENCE` enables Google-signed Pub/Sub push JWT verification. `PUBSUB_SERVICE_ACCOUNT_EMAIL`
+locks the accepted token identity to the service account configured on the push subscription.
+
 ## systemd
+```bash
+sudo cp family-office-mail-ingress.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now family-office-mail-ingress
+sudo systemctl status family-office-mail-ingress --no-pager
+```
 
-Use `family-office-mail-ingress.service.example` as the render source for host units.
+## Authenticated Pub/Sub Push
 
-## Health and operations
+The live subscription is `projects/stewardos-gcp-project/subscriptions/family-gmail-push`.
 
-- Keep ingress and worker on loopback unless behind trusted reverse proxy.
-- Rotate shared secret when changing trust boundaries.
+Configure push auth with a dedicated service account:
+
+```bash
+gcloud iam service-accounts create pubsub-push-ingress \
+  --project=stewardos-gcp-project \
+  --display-name="Pub/Sub push ingress"
+
+gcloud iam service-accounts add-iam-policy-binding \
+  pubsub-push-ingress@stewardos-gcp-project.iam.gserviceaccount.com \
+  --project=stewardos-gcp-project \
+  --member="user:principal@example.com" \
+  --role="roles/iam.serviceAccountUser"
+
+gcloud projects add-iam-policy-binding stewardos-gcp-project \
+  --member="serviceAccount:service-000000000000@gcp-sa-pubsub.iam.gserviceaccount.com" \
+  --role="roles/iam.serviceAccountTokenCreator"
+
+gcloud pubsub subscriptions update family-gmail-push \
+  --project=stewardos-gcp-project \
+  --push-endpoint=https://agent-mail.stewardos.example.com/webhooks/gmail \
+  --push-auth-service-account=pubsub-push-ingress@stewardos-gcp-project.iam.gserviceaccount.com \
+  --push-auth-token-audience=https://agent-mail.stewardos.example.com/webhooks/gmail
+```

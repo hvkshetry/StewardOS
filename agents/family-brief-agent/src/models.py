@@ -1,6 +1,6 @@
 """Data models for family brief agent."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -15,7 +15,7 @@ class IncomingEmail(BaseModel):
     body: str
     message_id: str
     thread_id: Optional[str] = None
-    received_at: datetime = Field(default_factory=datetime.utcnow)
+    received_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class AgentResponse(BaseModel):
