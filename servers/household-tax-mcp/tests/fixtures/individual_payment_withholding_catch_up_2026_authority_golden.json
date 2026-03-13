@@ -1,0 +1,73 @@
+{
+  "name": "individual_safe_harbor_withholding_catch_up_2026",
+  "tool": "compare_individual_payment_strategies",
+  "authority_sources": [
+    "https://www.irs.gov/publications/p505",
+    "https://www.irs.gov/taxtopics/tc306",
+    "https://www.mass.gov/administrative-procedure/ap-241-estimated-income-tax-payments"
+  ],
+  "workpaper_basis": [
+    "Federal required annual payment is the smaller of 90% of current-year tax and 110% of prior-year tax because prior-year AGI exceeds the high-AGI threshold.",
+    "Ratable withholding is treated as paid evenly through the year under Publication 505.",
+    "Massachusetts required payment is 80% of current-year tax once the estimated-tax trigger is met."
+  ],
+  "facts": {
+    "tax_year": 2026,
+    "jurisdictions": ["US", "MA"],
+    "residence_state": "MA",
+    "filing_status": "married_filing_jointly",
+    "wages": 240000,
+    "taxable_interest": 4000,
+    "ordinary_dividends": 2000,
+    "qualified_dividends": 6000,
+    "long_term_capital_gains": 15000,
+    "above_line_deductions": 5000,
+    "withholding_events": [],
+    "estimated_payments": [],
+    "prior_year": {
+      "total_tax": 30000,
+      "adjusted_gross_income": 220000,
+      "massachusetts_total_tax": 11000,
+      "full_year_return": true,
+      "filed": true
+    }
+  },
+  "as_of": "2026-09-30",
+  "expected": {
+    "recommended_strategy": "ratable_withholding_catch_up",
+    "safe_harbor": {
+      "federal": {
+        "required_annual_payment": "33000.00",
+        "safe_harbor_rule": "federal_required_annual_payment"
+      },
+      "massachusetts": {
+        "required_annual_payment": "10328.00",
+        "safe_harbor_rule": "massachusetts_80_percent_current_year"
+      }
+    },
+    "strategies": [
+      {
+        "strategy_id": "ratable_withholding_catch_up",
+        "additional_total": "43328.00",
+        "installment_safe_harbor_satisfied": true,
+        "actions": [
+          {
+            "action": "increase_withholding",
+            "jurisdiction": "US",
+            "deadline": "2026-12-31",
+            "amount": "33000.00"
+          },
+          {
+            "action": "increase_withholding",
+            "jurisdiction": "MA",
+            "deadline": "2026-12-31",
+            "amount": "10328.00"
+          }
+        ]
+      }
+    ],
+    "provenance": {
+      "authority_bundle_version": "us_ma_2026_v1"
+    }
+  }
+}

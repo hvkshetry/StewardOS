@@ -1,6 +1,22 @@
 [project]
 name = "household-tax-mcp"
-version = "0.1.0"
-description = "MCP server for US household income tax estimation using PolicyEngine"
+version = "1.0.0"
+description = "Exact-scope 2025/2026 US+MA household tax MCP server"
 requires-python = ">=3.10"
-dependencies = ["mcp>=1.0.0", "policyengine-us>=1.0.0"]
+dependencies = [
+    "behresp>=0.11.0",
+    "mcp>=1.0.0",
+    "psycopg[binary]>=3.2.0",
+    "stewardos-lib",
+    "taxcalc>=6.4.0",
+]
+
+[tool.uv.sources]
+stewardos-lib = { path = "../lib", editable = true }
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [".venv", "lib64"]

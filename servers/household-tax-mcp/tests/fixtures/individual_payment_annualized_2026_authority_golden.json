@@ -1,0 +1,81 @@
+{
+  "name": "individual_safe_harbor_annualized_income_2026",
+  "tool": "compare_individual_payment_strategies",
+  "authority_sources": [
+    "https://www.irs.gov/publications/p505",
+    "https://www.irs.gov/taxtopics/tc306",
+    "https://www.mass.gov/administrative-procedure/ap-241-estimated-income-tax-payments"
+  ],
+  "workpaper_basis": [
+    "The first three annualized periods have no income, so the annualized required cumulative installments are zero for both jurisdictions through September 15.",
+    "Federal installment percentages follow the annualized-income method described in Publication 505 and Form 2210 Schedule AI.",
+    "Massachusetts annualized-income percentages follow AP 241."
+  ],
+  "facts": {
+    "tax_year": 2026,
+    "jurisdictions": ["US", "MA"],
+    "residence_state": "MA",
+    "filing_status": "single",
+    "wages": 0,
+    "taxable_interest": 0,
+    "ordinary_dividends": 0,
+    "qualified_dividends": 0,
+    "long_term_capital_gains": 200000,
+    "above_line_deductions": 0,
+    "withholding_events": [],
+    "estimated_payments": [],
+    "annualized_periods": [
+      {"period_end": "2026-03-31", "long_term_capital_gains": 0},
+      {"period_end": "2026-05-31", "long_term_capital_gains": 0},
+      {"period_end": "2026-08-31", "long_term_capital_gains": 0},
+      {"period_end": "2026-12-31", "long_term_capital_gains": 200000}
+    ]
+  },
+  "as_of": "2026-09-30",
+  "expected": {
+    "recommended_strategy": "estimated_payments",
+    "safe_harbor": {
+      "federal": {
+        "annualized_income_method_used": true,
+        "installments": [
+          {"required_basis": "annualized_income", "required_cumulative": "0.00"},
+          {"required_basis": "annualized_income", "required_cumulative": "0.00"},
+          {"required_basis": "annualized_income", "required_cumulative": "0.00"},
+          {"required_basis": "regular_installment", "required_cumulative": "18150.75"}
+        ]
+      },
+      "massachusetts": {
+        "annualized_income_method_used": true,
+        "installments": [
+          {"required_basis": "annualized_income", "required_cumulative": "0.00"},
+          {"required_basis": "annualized_income", "required_cumulative": "0.00"},
+          {"required_basis": "annualized_income", "required_cumulative": "0.00"},
+          {"required_basis": "regular_installment", "required_cumulative": "7824.00"}
+        ]
+      }
+    },
+    "strategies": [
+      {
+        "strategy_id": "estimated_payments",
+        "installment_safe_harbor_satisfied": true,
+        "actions": [
+          {
+            "action": "make_estimated_payment",
+            "jurisdiction": "US",
+            "due_date": "2027-01-15",
+            "amount": "18150.75"
+          },
+          {
+            "action": "make_estimated_payment",
+            "jurisdiction": "MA",
+            "due_date": "2027-01-15",
+            "amount": "7824.00"
+          }
+        ]
+      }
+    ],
+    "provenance": {
+      "authority_bundle_version": "us_ma_2026_v1"
+    }
+  }
+}

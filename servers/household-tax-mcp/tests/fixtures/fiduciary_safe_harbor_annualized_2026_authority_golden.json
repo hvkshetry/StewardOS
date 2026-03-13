@@ -1,0 +1,89 @@
+{
+  "name": "fiduciary_safe_harbor_annualized_income_first_year_ma_2026",
+  "tool": "plan_fiduciary_safe_harbor",
+  "authority_sources": [
+    "https://www.irs.gov/publications/p505",
+    "https://www.irs.gov/forms-pubs/about-form-1041-es",
+    "https://www.mass.gov/administrative-procedure/ap-241-estimated-income-tax-payments"
+  ],
+  "workpaper_basis": [
+    "The trust's income is fully backloaded into the final annualized period, so federal and Massachusetts annualized required installments are zero through September 15.",
+    "The federal required annual payment equals 90% of current-year fiduciary tax because that is lower than the prior-year safe-harbor amount.",
+    "Massachusetts first-year fiduciary filers do not get a prior-year safe-harbor path and therefore use the 80% current-year rule."
+  ],
+  "facts": {
+    "tax_year": 2026,
+    "jurisdictions": ["US", "MA"],
+    "residence_state": "MA",
+    "fiduciary_kind": "trust",
+    "taxable_interest": 0,
+    "ordinary_dividends": 0,
+    "qualified_dividends": 0,
+    "long_term_capital_gains": 24000,
+    "deductions": 1000,
+    "exemption_amount": 100,
+    "capital_gains_in_dni": false,
+    "withholding_events": [],
+    "estimated_payments": [],
+    "annualized_periods": [
+      {"period_end": "2026-03-31", "long_term_capital_gains": 0, "deductions": 0},
+      {"period_end": "2026-05-31", "long_term_capital_gains": 0, "deductions": 0},
+      {"period_end": "2026-08-31", "long_term_capital_gains": 0, "deductions": 0},
+      {"period_end": "2026-12-31", "long_term_capital_gains": 24000, "deductions": 1000}
+    ],
+    "prior_year": {
+      "total_tax": 20000,
+      "adjusted_gross_income": 12000,
+      "massachusetts_total_tax": 500,
+      "full_year_return": true,
+      "filed": true,
+      "first_year_massachusetts_fiduciary": true
+    }
+  },
+  "as_of": "2026-09-30",
+  "expected": {
+    "recommended_strategy": "estimated_payments",
+    "massachusetts_first_year_fiduciary": true,
+    "safe_harbor": {
+      "federal": {
+        "annualized_income_method_used": true,
+        "required_annual_payment": "3184.65",
+        "installments": [
+          {"required_basis": "annualized_income", "required_cumulative": "0.00"},
+          {"required_basis": "annualized_income", "required_cumulative": "0.00"},
+          {"required_basis": "annualized_income", "required_cumulative": "0.00"},
+          {"required_basis": "regular_installment", "required_cumulative": "3184.65"}
+        ]
+      },
+      "massachusetts": {
+        "annualized_income_method_used": true,
+        "prior_year_safe_harbor_available": false,
+        "safe_harbor_rule": "massachusetts_80_percent_current_year_first_year_fiduciary",
+        "required_annual_payment": "916.00",
+        "installments": [
+          {"required_basis": "annualized_income", "required_cumulative": "0.00"},
+          {"required_basis": "annualized_income", "required_cumulative": "0.00"},
+          {"required_basis": "annualized_income", "required_cumulative": "0.00"},
+          {"required_basis": "regular_installment", "required_cumulative": "916.00"}
+        ]
+      }
+    },
+    "recommended_actions": [
+      {
+        "action": "make_estimated_payment",
+        "jurisdiction": "US",
+        "due_date": "2027-01-15",
+        "amount": "3184.65"
+      },
+      {
+        "action": "make_estimated_payment",
+        "jurisdiction": "MA",
+        "due_date": "2027-01-15",
+        "amount": "916.00"
+      }
+    ],
+    "provenance": {
+      "authority_bundle_version": "us_ma_2026_v1"
+    }
+  }
+}

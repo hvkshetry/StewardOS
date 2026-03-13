@@ -1,0 +1,61 @@
+{
+  "name": "individual_return_2025_mfj_massachusetts_resident",
+  "tool": "compute_individual_return_exact",
+  "authority_sources": [
+    "https://www.irs.gov/newsroom/irs-provides-tax-inflation-adjustments-for-tax-year-2025",
+    "https://www.irs.gov/pub/irs-drop/rp-24-40.pdf",
+    "https://www.mass.gov/info-details/massachusetts-personal-income-tax-exemptions"
+  ],
+  "workpaper_basis": [
+    "Federal AGI equals wages, interest, dividends, and long-term gains less above-line deductions.",
+    "Federal standard deduction and 2025 rate thresholds come from the IRS 2025 inflation-adjustment authority bundle (Tax-Calculator v6.4.0).",
+    "Massachusetts taxable general income uses the resident personal exemption schedule and the 5% general rate."
+  ],
+  "facts": {
+    "tax_year": 2025,
+    "jurisdictions": ["US", "MA"],
+    "residence_state": "MA",
+    "filing_status": "married_filing_jointly",
+    "wages": 200000,
+    "taxable_interest": 2000,
+    "ordinary_dividends": 1000,
+    "qualified_dividends": 5000,
+    "long_term_capital_gains": 20000,
+    "above_line_deductions": 5000,
+    "withholding_events": [],
+    "estimated_payments": []
+  },
+  "expected": {
+    "return": {
+      "federal": {
+        "adjusted_gross_income": "228000.00",
+        "deduction": "31500.00",
+        "deduction_type": "standard",
+        "taxable_income": "196500.00",
+        "ordinary_taxable_income": "171500.00",
+        "preferential_income": "25000.00",
+        "preferential_taxable_income": "25000.00",
+        "tax_before_credits": "31308.00",
+        "child_and_dependent_credits": "0.00",
+        "alternative_minimum_tax": "0.00",
+        "net_investment_income_tax": "0.00",
+        "total_tax": "31308.00"
+      },
+      "massachusetts": {
+        "personal_exemption": "8800.00",
+        "taxable_general_income": "219200.00",
+        "taxable_short_term_capital_gains": "0.00",
+        "surtax_base": "219200.00",
+        "regular_tax": "10960.00",
+        "surtax": "0.00",
+        "total_tax": "10960.00"
+      },
+      "combined_total_tax": "42268.00",
+      "projected_balance_due": "42268.00"
+    },
+    "provenance": {
+      "authority_bundle_version": "us_ma_2025_v1",
+      "federal_kernel": "taxcalc_2025"
+    }
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "name": "individual_payment_withholding_catch_up_2025_mfj_massachusetts_resident",
+  "tool": "compare_individual_payment_strategies",
+  "authority_sources": [
+    "https://www.irs.gov/pub/irs-drop/rp-24-40.pdf",
+    "https://www.irs.gov/publications/p505",
+    "https://www.mass.gov/info-details/massachusetts-personal-income-tax-exemptions"
+  ],
+  "workpaper_basis": [
+    "Safe-harbor required annual payment uses the lower of 100% prior-year tax (110% if AGI > $150K) or 90% current-year tax.",
+    "TY2025 installment due dates: April 15, June 16 (weekend shift), September 15, January 15.",
+    "Massachusetts uses 80% current-year safe harbor with prior-year safe harbor when prior-year return was filed."
+  ],
+  "facts": {
+    "tax_year": 2025,
+    "jurisdictions": ["US", "MA"],
+    "residence_state": "MA",
+    "filing_status": "married_filing_jointly",
+    "wages": 240000,
+    "taxable_interest": 4000,
+    "ordinary_dividends": 2000,
+    "qualified_dividends": 6000,
+    "long_term_capital_gains": 15000,
+    "above_line_deductions": 5000,
+    "withholding_events": [],
+    "estimated_payments": [],
+    "prior_year": {
+      "total_tax": 30000,
+      "adjusted_gross_income": 220000,
+      "massachusetts_total_tax": 11000,
+      "full_year_return": true,
+      "filed": true
+    }
+  },
+  "as_of": "2025-09-30",
+  "expected": {
+    "tax_year": 2025,
+    "recommended_strategy": "ratable_withholding_catch_up",
+    "safe_harbor": {
+      "federal": {
+        "trigger_met": true,
+        "required_annual_payment": "33000.00",
+        "installments": [
+          {"due_date": "2025-04-15"},
+          {"due_date": "2025-06-16"},
+          {"due_date": "2025-09-15"},
+          {"due_date": "2026-01-15"}
+        ],
+        "prior_year_safe_harbor_available": true
+      },
+      "massachusetts": {
+        "trigger_met": true,
+        "required_annual_payment": "10328.00",
+        "installments": [
+          {"due_date": "2025-04-15"},
+          {"due_date": "2025-06-16"},
+          {"due_date": "2025-09-15"},
+          {"due_date": "2026-01-15"}
+        ],
+        "prior_year_safe_harbor_available": true
+      }
+    },
+    "provenance": {
+      "authority_bundle_version": "us_ma_2025_v1"
+    }
+  }
+}

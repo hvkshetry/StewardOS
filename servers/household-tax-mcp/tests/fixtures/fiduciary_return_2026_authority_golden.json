@@ -1,0 +1,66 @@
+{
+  "name": "fiduciary_return_2026_complex_trust_massachusetts_resident",
+  "tool": "compute_fiduciary_return_exact",
+  "authority_sources": [
+    "https://www.irs.gov/pub/irs-drop/rp-25-32.pdf",
+    "https://www.irs.gov/forms-pubs/about-form-1041-es",
+    "https://www.irs.gov/individuals/net-investment-income-tax",
+    "https://www.mass.gov/info-details/massachusetts-personal-income-tax-exemptions"
+  ],
+  "workpaper_basis": [
+    "The federal trust brackets, capital-gain tiers, and section 1(e) top-bracket threshold follow the 2026 IRS authority bundle.",
+    "Net investment income tax for trusts uses the excess of adjusted gross income over the section 1(e) top-bracket threshold.",
+    "Massachusetts uses the explicit fiduciary taxable general income provided in the facts payload."
+  ],
+  "facts": {
+    "tax_year": 2026,
+    "jurisdictions": ["US", "MA"],
+    "residence_state": "MA",
+    "fiduciary_kind": "trust",
+    "taxable_interest": 1000,
+    "ordinary_dividends": 2000,
+    "qualified_dividends": 3000,
+    "long_term_capital_gains": 12000,
+    "deductions": 1000,
+    "exemption_amount": 100,
+    "capital_gains_in_dni": false,
+    "massachusetts": {
+      "taxable_general_income": 17000,
+      "taxable_short_term_capital_gains": 0
+    },
+    "withholding_events": [],
+    "estimated_payments": []
+  },
+  "expected": {
+    "return": {
+      "federal": {
+        "adjusted_gross_income": "17000.00",
+        "distributable_net_income": "5000.00",
+        "distribution_deduction": "0.00",
+        "deductions": "1000.00",
+        "exemption_amount": "100.00",
+        "taxable_income": "16900.00",
+        "ordinary_taxable_income": "1900.00",
+        "preferential_taxable_income": "15000.00",
+        "tax_before_credits": "2262.50",
+        "alternative_minimum_tax": "0.00",
+        "net_investment_income_tax": "38.00",
+        "total_tax": "2300.50"
+      },
+      "massachusetts": {
+        "taxable_general_income": "17000.00",
+        "taxable_short_term_capital_gains": "0.00",
+        "surtax_base": "17000.00",
+        "regular_tax": "850.00",
+        "surtax": "0.00",
+        "total_tax": "850.00"
+      },
+      "combined_total_tax": "3150.50",
+      "projected_balance_due": "3150.50"
+    },
+    "provenance": {
+      "authority_bundle_version": "us_ma_2026_v1",
+      "federal_kernel": "builtin_2026_fiduciary_kernel"
+    }
+  }
+}
