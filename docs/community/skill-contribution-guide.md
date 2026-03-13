@@ -91,7 +91,7 @@ Good output contracts specify:
 
 These are the most frequently used MCP tools for each persona. Reference these when designing your skill's tool map.
 
-### Investment Officer
+### Portfolio Manager / Research Analyst
 
 | Tool | Server | What It Returns |
 |------|--------|----------------|
@@ -113,8 +113,9 @@ These are the most frequently used MCP tools for each persona. Reference these w
 | `analytics(operation="spending_by_category")` | actual | Category-level spending breakdown |
 | `upsert_financial_statement_period` | finance-graph | Create/update reporting period |
 | `upsert_statement_line_items` | finance-graph | Persist P&L/BS/CFS line items |
-| `compare_scenarios` | household-tax | Multi-scenario tax comparison |
-| `evaluate_scenario` | household-tax | Single scenario tax evaluation |
+| `compute_individual_return_exact` | household-tax | Exact TY2025/2026 US+MA individual tax return |
+| `plan_individual_safe_harbor` | household-tax | Safe harbor quarterly estimated tax plan |
+| `compare_individual_payment_strategies` | household-tax | Multi-strategy tax payment comparison |
 
 ### Estate Counsel
 
@@ -143,8 +144,9 @@ These are the most frequently used MCP tools for each persona. Reference these w
 | `get_workout_log` | wger | Recent exercise entries |
 | `get_nutrition_values` | wger | Macro calculations for nutrition plan |
 | `get_body_weight` | wger | Weight history over time |
-| `search_medical_documents` | health-records | Medical documents by tag |
-| `get_recent_lab_results` | health-records | Lab result documents from last N days |
+| `query_genome_assertions` | health-graph | Genome-aware clinical assertions (PGx, Tier 1-4) |
+| `get_clinical_assertions` | health-graph | Clinical assertion timeline with linked evidence |
+| `get_lab_results` | health-graph | Lab result history with reference ranges |
 
 ## Testing your skill
 

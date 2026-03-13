@@ -1,101 +1,44 @@
 # systemd Runtime
 
-StewardOS uses systemd for long-running agent-facing services (ingress, worker, scheduled briefing) while Compose handles the application stack.
+StewardOS uses systemd-managed services for host-level ingress and automation runtimes.
 
-## Why this exists
+## Service Topology
 
-The runtime needs always-on daemons with predictable restart behavior, host-native logging, and boot-time recovery.
+Primary host services include:
 
-systemd is used because it provides:
+- **family-office-mail-ingress** — FastAPI webhook for Gmail Pub/Sub and Plane webhooks (home-server, system scope)
+- **family-office-mail-worker** — FastAPI worker that processes inbound email, generates replies, runs Plane poller, and executes scheduled jobs (local machine, user scope)
+- **family-brief-agent** — scheduled briefing/scheduler service (optional)
+- **home-server-db-tunnel** — SSH tunnel connecting local machine to home-server services
+- **cloudflared** — Cloudflare tunnel for external ingress (home-server)
 
-- stable lifecycle management for Python/uvicorn processes,
-- restart policies and failure containment,
-- `journalctl` observability for service-level debugging,
-- clean separation from containerized data applications.
+## Mail Pipeline
 
-## What is currently configured
+The mail pipeline is split across two hosts:
 
-Tracked service templates:
+1. Gmail Pub/Sub pushes notifications to Cloudflare tunnel
+2. **Ingress** (home-server) validates OIDC tokens, extracts history IDs, forwards to worker via reverse SSH tunnel
+3. **Worker** (local machine) fetches full messages from Gmail API, routes to persona-specific handlers, generates replies via MCP tool calls
 
-- [`agents/family-office-mail-ingress/family-office-mail-ingress.service.example`](../../../agents/family-office-mail-ingress/family-office-mail-ingress.service.example)
-- [`agents/family-office-mail-worker/family-office-mail-worker.service.example`](../../../agents/family-office-mail-worker/family-office-mail-worker.service.example)
-- [`agents/family-brief-agent/family-brief-agent.service.example`](../../../agents/family-brief-agent/family-brief-agent.service.example)
+The worker also runs:
+- **Plane poller** — polls Plane work items for case completion and delegation events
+- **Plane webhook handler** — receives forwarded Plane webhooks from ingress (HMAC-SHA256 verified)
+- **Scheduled jobs** — APScheduler-driven briefings and maintenance tasks loaded from `agents/schedules.yaml`
 
-Template rendering/installation is automated by:
+## Deployment Pattern
 
-- [`provisioning/configure-systemd.example.sh`](../../../provisioning/configure-systemd.example.sh)
+- service unit templates are tracked as `*.service.example`,
+- production units remain local and host-specific,
+- deployment scripts should render user/path values per host.
 
-### Runtime topology
+## Reliability Expectations
 
-- Ingress service binds loopback `:8311` and validates webhook envelopes.
-- Worker service binds loopback `:8312` and executes persona workflows.
-- Brief service binds loopback `:8300` for scheduled/context brief generation.
-- Compose-hosted systems remain separate and are consumed through MCP/tool calls.
+- restart policy enabled for long-running services,
+- health endpoints exposed for runtime checks (see [ENV Configuration](ENV_CONFIGURATION.md)),
+- logs routed through journald for operational troubleshooting.
 
-### Gmail automation path
+## Related Documentation
 
-The full email automation pipeline works as follows:
-
-1. **Gmail Pub/Sub push** delivers a notification to the ingress endpoint (`:8311`).
-2. **Ingress validates the envelope signature** (Google Cloud Pub/Sub message authentication) and rejects invalid payloads.
-3. **Ingress forwards the validated message** internally to the worker service (`:8312`).
-4. **Worker extracts the recipient alias** from the incoming message headers (e.g., `investment-officer@<domain>`).
-5. **Worker resolves the persona** by loading the contract from `agent-configs/<alias>/AGENTS.md` and runtime config from `agent-configs/<alias>/.codex/config.toml`.
-6. **Worker executes within persona boundaries** — the persona's MCP server access, skill set, and escalation rules are enforced.
-7. **Worker replies via `google-workspace-mcp`** using the persona's configured `from_email` alias and structured completion contract.
-
-### Scheduled briefing path
-
-1. Brief service runs cron-triggered jobs at configured intervals.
-2. It invokes the configured agent runtime with persona rules (e.g., Investment Officer for morning briefings, Chief of Staff for weekly reviews).
-3. Output is delivered through configured communication channels (email, memos).
-
-### Environment management
-
-Each systemd service loads its runtime configuration from a local `.env` file via the systemd `EnvironmentFile=` directive. Template `.env` files are rendered by the provisioning script (`provisioning/configure-systemd.example.sh`) during deployment, replacing placeholder values with deployment-specific secrets and paths.
-
-### Dependency ordering
-
-systemd services require the Docker Compose application stack to be running — Compose services provide the data plane that MCP servers connect to. The systemd units use `After=network.target` but do not declare explicit Compose dependencies; operators should ensure `docker compose up -d` completes before starting agent services.
-
-## Workflows
-
-See [README.md](../../../README.md#autonomous-agent-runtime) for end-to-end workflow examples showing how the agent runtime executes persona-scoped workflows.
-
-## Operations and observability
-
-Typical commands (host):
-
-```bash
-sudo systemctl status family-office-mail-ingress
-sudo systemctl status family-office-mail-worker
-sudo systemctl status family-brief-agent
-sudo journalctl -u family-office-mail-worker -n 200 --no-pager
-```
-
-Expected operational posture:
-
-- `Restart=always` for core daemons.
-- Loopback binds by default.
-- Environment loaded from local `.env` files via `EnvironmentFile=` directive.
-
-## Customization and extension
-
-### Add a new runtime daemon
-
-1. Add app code under `agents/<service-name>/`.
-2. Create `<service-name>.service.example` with placeholder user/paths.
-3. Extend provisioning template script to render/install the new unit.
-4. Document port, health endpoint, and failure behavior.
-
-### Harden runtime boundaries
-
-- Run as dedicated non-root system user.
-- Keep public ingress through a controlled reverse proxy only.
-- Add health probes and lightweight smoke checks for each service.
-
-## Boundaries
-
-- systemd runtime manages process lifecycle only.
-- It does not define persona behavior, skill logic, or tool access policy.
-- Those contracts remain in `agent-configs/`, `skills/`, and MCP server configs.
+- [AI Agent Architecture Primer](../../../AI_AGENT_ARCHITECTURE_PRIMER.md) — split-host topology, port mappings, what-to-restart-when
+- [ENV Configuration](ENV_CONFIGURATION.md) — required env vars, pydantic-settings behavior, incident runbook
+- [Plane Workspaces](../../../services/plane/WORKSPACES.md) — workspace domain taxonomy
