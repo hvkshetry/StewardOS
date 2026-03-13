@@ -1,84 +1,69 @@
 # Contributing to StewardOS
 
-## Development Model
+## User Contributions
 
-This repository is an integration architecture. Contributions should prioritize:
+StewardOS is built for people who manage their own affairs — portfolio, household budget, health, estate — and have developed practical expertise doing it. The most valuable contributions encode real workflows as skills.
 
-- clear boundaries between persona capabilities,
-- safe defaults for self-hosted deployments,
-- reproducible MCP dependency pinning,
-- documented operational behavior.
+### Contributing a skill (no local setup required)
 
-## Getting Started
+Skills are markdown files. You can contribute one without cloning the repo or running the stack:
+
+1. **Pick your persona**: choose the role that matches your expertise
+   - Managing portfolios → [Portfolio Manager](agent-configs/investment-officer/AGENTS.md)
+   - Investment research & analysis → [Research Analyst](agent-configs/research-analyst/AGENTS.md)
+   - Running household finances → [Household Comptroller](agent-configs/household-comptroller/AGENTS.md)
+   - Handling estate/legal matters → [Estate Counsel](agent-configs/estate-counsel/AGENTS.md)
+   - Running household logistics → [Household Director](agent-configs/household-director/AGENTS.md)
+   - Tracking health/fitness → [Wellness Advisor](agent-configs/wellness-advisor/AGENTS.md)
+   - Managing insurance → [Insurance Advisor](agent-configs/insurance-advisor/AGENTS.md)
+   - Coordinating across domains → [Chief of Staff](agent-configs/chief-of-staff/AGENTS.md)
+
+2. **Read 2-3 existing skills** in `skills/personas/<persona>/` to understand the structure
+
+3. **Write your skill** following the [Skill Contribution Guide](docs/community/skill-contribution-guide.md) — includes an annotated example, tool reference tables, and a PR checklist
+
+4. **Submit via GitHub**: create your `skills/personas/<persona>/<skill-name>/SKILL.md` file and open a PR
+
+### Sanitization checklist (all contributions)
+
+Before submitting any contribution, verify it contains none of the following:
+
+- [ ] Personal names, email addresses, or email aliases
+- [ ] Domain names, URLs, or IP addresses specific to a deployment
+- [ ] Account IDs, API keys, tokens, or credentials
+- [ ] File paths that include usernames or deployment-specific directories
+- [ ] References to specific financial accounts, portfolio holdings, or tax details
+
+## Development Contributions
+
+### Getting started
 
 1. Clone the repository.
 2. Copy required `*.example` files to local runtime equivalents.
 3. Bootstrap upstream MCP dependencies:
-   - `scripts/bootstrap_upstreams.sh`
+   ```bash
+   scripts/bootstrap_upstreams.sh
+   ```
 4. Verify pinned checkouts:
-   - `scripts/verify_upstreams.sh`
+   ```bash
+   scripts/verify_upstreams.sh
+   ```
 
-## Sensitive Files
+### Sensitive files
 
 Do not commit:
 
-- live `.env` files,
-- runtime `.codex` state,
-- OAuth credential/token files,
-- local database or log artifacts.
+- live `.env` files
+- runtime `.codex` state
+- OAuth credential/token files
+- local database or log artifacts
 
-Use sanitized `*.example` files.
+Use sanitized `*.example` files for any new configuration.
 
-## Shared Library (`servers/lib/`)
-
-Duplicated domain logic lives in `stewardos-lib`. When adding shared functions:
-
-- Pure helpers -> `constants.py` or `json_utils.py`
-- Database operations -> `domain_ops.py` (accept `asyncpg.Pool`, return `asyncpg.Record`)
-- Add tests in `servers/lib/tests/`
-
-Consuming servers use a local path dep — see [`servers/lib/README.md`](servers/lib/README.md).
-
-## Shared Agent Library (`agents/lib/`)
-
-Cross-agent utilities live in `agents/lib/`:
-
-- `gmail_watch.py` — Gmail watch API helpers
-- `pubsub_validation.py` — Pub/Sub message validation
-- `schedule_loader.py` — YAML schedule loading for APScheduler
-
-## Server Decomposition
-
-DB-backed servers use the `register_<domain>_tools(mcp, get_pool)` pattern:
-
-- `server.py` is a thin orchestrator — no tool logic inline
-- Each domain module registers its tools via the decorator pattern
-- Tests use `FakeMCP` + `mock_asyncpg_pool` from `test_support/`
-
-The same pattern applies to `plane-mcp` with 12 tool modules and `get_client()` DI.
-
-## Testing
-
-```bash
-make test-all        # 411 tests across 19 projects
-make test-server NAME=health-graph-mcp  # run one server
-make lint            # ruff check
-make verify-skills   # skill-to-tool contract verification
-```
-
-Tests run per-project via `uv run --extra dev pytest tests/ -v`. Add `pytest` (and `pytest-asyncio` for async tests) to `[project.optional-dependencies] dev` in each server's `pyproject.toml`.
-
-## Persona and Skill Contributions
-
-- Each persona config lives in `agent-configs/<persona>/AGENTS.md`
-- Skills live in `skills/personas/<persona>/` (persona-specific) or `skills/shared/` (cross-domain)
-- Skill-to-tool contracts are verified by CI (`make verify-skills`)
-- See [Agent Personas](docs/architecture/agent-personas/README.md) for the 8-persona model
-- See [Agent Skills](docs/architecture/agent-skills/README.md) for skill design guidelines
-
-## Pull Request Guidelines
+### Pull request guidelines
 
 - Keep changes scoped and documented.
 - Update architecture docs when behavior or boundaries change.
 - Include migration notes for any configuration contract change.
 - Preserve anonymization in public-facing examples and docs.
+- For persona/skill changes, include concrete before/after examples and rationale.

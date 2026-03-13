@@ -91,7 +91,7 @@ Good output contracts specify:
 
 These are the most frequently used MCP tools for each persona. Reference these when designing your skill's tool map.
 
-### Portfolio Manager / Research Analyst
+### Portfolio Manager
 
 | Tool | Server | What It Returns |
 |------|--------|----------------|
@@ -104,6 +104,20 @@ These are the most frequently used MCP tools for each persona. Reference these w
 | `get_macro_context_panel` | market-intel-direct | Multi-series FRED data for regime analysis |
 | `sec_edgar_filing` | sec-edgar | Recent SEC filings by company |
 | `sec_edgar_insider` | sec-edgar | Insider transaction summary |
+| `discover_work_items` | plane-pm | Work items in investment-office workspace |
+| `create_work_item` | plane-pm | Create task or delegate to Research Analyst |
+
+### Research Analyst
+
+| Tool | Server | What It Returns |
+|------|--------|----------------|
+| `get_market_snapshot` | market-intel-direct | Current indices, rates, commodities |
+| `search_market_news` | market-intel-direct | Recent news articles by query |
+| `get_macro_context_panel` | market-intel-direct | Multi-series FRED data for regime analysis |
+| `get_symbol_history` | market-intel-direct | Historical price data for analysis |
+| `sec_edgar_filing` | sec-edgar | Recent SEC filings by company |
+| `sec_edgar_financial` | sec-edgar | Financial statement data via XBRL |
+| `sec_edgar_insider` | sec-edgar | Insider transaction summary |
 
 ### Household Comptroller
 
@@ -113,9 +127,9 @@ These are the most frequently used MCP tools for each persona. Reference these w
 | `analytics(operation="spending_by_category")` | actual | Category-level spending breakdown |
 | `upsert_financial_statement_period` | finance-graph | Create/update reporting period |
 | `upsert_statement_line_items` | finance-graph | Persist P&L/BS/CFS line items |
-| `compute_individual_return_exact` | household-tax | Exact TY2025/2026 US+MA individual tax return |
-| `plan_individual_safe_harbor` | household-tax | Safe harbor quarterly estimated tax plan |
-| `compare_individual_payment_strategies` | household-tax | Multi-strategy tax payment comparison |
+| `compute_individual_return_exact` | household-tax | Exact 2025/2026 individual tax return |
+| `plan_individual_safe_harbor` | household-tax | Safe-harbor payment planning |
+| `compare_individual_payment_strategies` | household-tax | Payment strategy comparison |
 
 ### Estate Counsel
 
@@ -144,9 +158,19 @@ These are the most frequently used MCP tools for each persona. Reference these w
 | `get_workout_log` | wger | Recent exercise entries |
 | `get_nutrition_values` | wger | Macro calculations for nutrition plan |
 | `get_body_weight` | wger | Weight history over time |
-| `query_genome_assertions` | health-graph | Genome-aware clinical assertions (PGx, Tier 1-4) |
-| `get_clinical_assertions` | health-graph | Clinical assertion timeline with linked evidence |
-| `get_lab_results` | health-graph | Lab result history with reference ranges |
+| `get_wellness_recommendations` | health-graph | Genome-aware wellness recommendations |
+| `get_pgx_context` | health-graph | Pharmacogenomics context for a subject |
+| `get_polygenic_context` | health-graph | Polygenic risk score context |
+| `query_variant_assertions` | health-graph | Clinical variant assertions |
+
+### Insurance Advisor
+
+| Tool | Server | What It Returns |
+|------|--------|----------------|
+| `search` | paperless | Policy documents, declarations pages, EOBs |
+| `get_net_worth` | finance-graph | Asset/liability context for coverage adequacy |
+| `get_ownership_graph` | estate-planning | Trust/entity structure for named-insured alignment |
+| `analytics(operation="spending_by_category")` | actual | Premium payment tracking, insurance budget lines |
 
 ## Testing your skill
 

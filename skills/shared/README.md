@@ -1,11 +1,26 @@
-Shared skills used by multiple personas. Place cross-cutting skills here when they are relevant to more than one persona.
+# Shared Skill References
 
-## Current Shared Skills
+`skills/shared/` contains reusable reference material consumed by multiple persona skills.
 
-- **orchestration-patterns** — cross-persona routing matrix, complexity scoring, multi-agent synthesis (used by Chief of Staff)
-- **search** — cross-source retrieval workflow (temporary, used by Chief of Staff)
-- **search-strategy** — query decomposition and source-aware search strategy (temporary, used by Chief of Staff)
+## Why this folder exists
 
-## Cross-Domain Reference Files
+Many workflows need common conventions (taxonomy, formatting, quality checks). Centralizing shared references avoids duplicated logic and inconsistent outputs.
 
-Shared references used by multiple persona skills (budgeting, meal-planning, child-development, document-management, investing). Place cross-cutting reference files here when they are relevant to more than one skill.
+## Typical contents
+
+- shared vocabulary/taxonomy,
+- formatting templates,
+- provenance/reporting conventions,
+- reusable validation rules.
+
+## Contribution guidance
+
+When adding shared material:
+
+1. ensure it applies to multiple skills,
+2. keep language persona-neutral,
+3. document intended consumers,
+4. avoid embedding secrets or personal identifiers.
+
+For domain-specific contribution patterns, use:
+- `docs/community/skill-contribution-guide.md`

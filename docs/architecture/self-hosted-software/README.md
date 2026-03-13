@@ -1,65 +1,105 @@
 # Self-Hosted Software
 
-StewardOS runs a consolidated local software stack via Docker Compose on a dedicated home server.
+StewardOS runs on a self-hosted OSS application stack defined in [`services/docker-compose.yml`](../../../services/docker-compose.yml).
 
-## Platform Services
+## Why this exists
 
-### Infrastructure
+This layer is the operational substrate for everything else in StewardOS:
 
-- **PostgreSQL 16.6** (`personal-db`) — shared by Paperless, Ghostfolio, wger, family-edu-mcp, and other DB-backed MCP servers
-- **Redis 7** (`personal-redis`) — shared by Paperless and Ghostfolio
+- It hosts the systems of record (documents, budgets, portfolio state, inventory, notes).
+- It gives MCP servers stable local targets to integrate against.
+- It keeps critical household/family-office workflows portable and auditable on your own infrastructure.
 
-### Document & Knowledge Management
+Without this layer, personas can still generate text, but they cannot reliably read or update real operating state.
 
-- **Paperless-ngx** (2.20.7) — document management with OCR and tagging
-- **Memos** — notes and knowledge capture
-- **Vaultwarden** (1.35.2) — password management
+## What is currently configured
 
-### Financial
+Compose currently provisions a loopback-first stack with explicit healthchecks, resource limits, and env-driven secrets via [`services/.env.example`](../../../services/.env.example).
 
-- **Actual Budget** — budgeting and cash flow
-- **Ghostfolio** — portfolio tracking and performance analytics
+### Tier 1: Core Infrastructure
 
-### Household Operations
+Shared data plane services that other applications depend on.
 
-- **Mealie** — meal planning and recipes
-- **Grocy** — pantry inventory and shopping lists
-- **Homebox** — home inventory tracking
-- **wger** — workout and nutrition tracking
+| Service | Image | Dependents | Description |
+|---------|-------|------------|-------------|
+| `personal-db` | PostgreSQL 16 | Paperless-ngx, Ghostfolio, wger, Plane, estate-planning-mcp, finance-graph-mcp, household-tax-mcp, health-graph-mcp, family-edu-mcp | Shared relational database for all stateful services |
+| `personal-redis` | Redis 7 | Paperless-ngx, Ghostfolio, wger | Cache/queue backend |
 
-### Project Management (Plane Stack)
+### Tier 2: Application Services
 
-Plane provides the single source of truth for task delegation across all 8 personas:
+Domain-specific applications that serve as systems of record, each exposed to personas through MCP servers.
 
-- **plane-api** — REST API server
-- **plane-worker** — background task processing
-- **plane-beat-worker** — scheduled task runner
-- **plane-migrator** — database migrations
-- **plane-admin** — admin interface
-- **plane-space** — public-facing spaces
-- **plane-live** — real-time collaboration
-- **plane-web** — web frontend
-- **plane-db** (Postgres 15) — dedicated Plane database
-- **plane-redis** (Valkey 8) — dedicated Plane cache/queue
-- **plane-minio** — S3-compatible object storage for Plane
+| Service | Image | Depends On | MCP Server | Description |
+|---------|-------|------------|------------|-------------|
+| `paperless-ngx` | Paperless-ngx 2.20 | PostgreSQL, Redis | `paperless-mcp`, `health-graph-mcp` | Document ingestion, OCR, tagging, retrieval |
+| `ghostfolio` | Ghostfolio 2.243 | PostgreSQL, Redis | `ghostfolio-mcp`, `portfolio-analytics` | Portfolio tracking and holdings context |
+| `actual-budget` | Actual Server 26.2 | — | `actual-mcp` | Household budgeting and transaction ledger |
+| `mealie` | Mealie v3.11 | — | `mealie-mcp-server` | Recipes and weekly meal planning |
+| `grocy` | Grocy 4.5 | — | `grocy-mcp` | Pantry and consumable inventory |
+| `wger-web` + celery + nginx | wger 2.3-dev | PostgreSQL, Redis | `wger-mcp` | Fitness and nutrition tracking |
+| `homebox` | Homebox 0.23 | — | `homebox-mcp` | Household asset/inventory tracking |
+| `memos` | Memos 0.26 | — | `memos-mcp` | Quick capture, household notes, decision logs |
 
-See [Plane Workspaces](../../services/plane/WORKSPACES.md) for the 7-workspace domain taxonomy.
+### Tier 2b: Plane Project Management Stack
 
-## Runtime Characteristics
+Plane provides cross-persona task delegation, case management, and governance tracking — exposed through `plane-mcp` (59 tools). The stack runs as 12 containers with a dedicated Valkey instance.
 
-- services are loopback-bound by default,
-- health checks are defined for critical services,
-- resource limits are explicitly set in compose definitions,
-- external exposure is through Cloudflare tunnel to selected services.
+| Service | Image | Depends On | Description |
+|---------|-------|------------|-------------|
+| `plane-api` | Plane (latest) | PostgreSQL, plane-valkey, plane-mq | Core API server |
+| `plane-worker` | Plane (latest) | PostgreSQL, plane-valkey, plane-mq | Background job processing |
+| `plane-beat` | Plane (latest) | PostgreSQL, plane-valkey, plane-mq | Periodic task scheduler |
+| `plane-web` | Plane (latest) | plane-api | Web frontend |
+| `plane-admin` | Plane (latest) | plane-api | Admin panel |
+| `plane-space` | Plane (latest) | plane-api | Public project spaces |
+| `plane-live` | Plane (latest) | plane-api | Real-time collaboration |
+| `plane-proxy` | Plane (latest) | plane-web, plane-api | Reverse proxy |
+| `plane-migrator` | Plane (latest) | PostgreSQL | Database migration runner |
+| `plane-valkey` | Valkey 8 | — | Dedicated cache/queue (Redis-compatible) |
+| `plane-mq` | Valkey 8 | — | Dedicated message queue |
+| `plane-minio` | Minio (latest) | — | S3-compatible object storage for attachments |
 
-## Operational Notes
+> **Note on Plane workspaces**: StewardOS configures 7 domain-scoped workspaces (chief-of-staff, estate-counsel, household-finance, household-ops, investment-office, wellness, insurance). Each persona's `PLANE_HOME_WORKSPACE` determines write access boundaries.
 
-- service-specific credentials are configured via local `.env` files (gitignored),
-- public templates are provided via `services/.env.example` and `services/plane/env.template`,
-- backup and retention strategy is documented in `services/backup-personal.sh`,
-- database initialization handled by `services/personal-db/init-databases.sh`.
+### Tier 3: Support Services
 
-## Infrastructure Changes (March 2026)
+Infrastructure utilities that are not systems of record.
 
-- **Added:** Full Plane stack (12 containers + dedicated Valkey)
-- **Removed:** n8n (workflow automation), Directus (data studio), changedetection.io (web monitoring) — all superseded by Plane-based task management and agent-driven automation
+| Service | Image | Description |
+|---------|-------|-------------|
+| `vaultwarden` | Vaultwarden 1.35 | Credential vault |
+| `watchtower` | Watchtower (latest) | Optional rolling container image update automation |
+
+### Contracted files in this repository
+
+- [`services/docker-compose.yml`](../../../services/docker-compose.yml)
+- [`services/.env.example`](../../../services/.env.example)
+- [`services/personal-db/init-databases.sh`](../../../services/personal-db/init-databases.sh)
+- [`services/wger/nginx.conf`](../../../services/wger/nginx.conf)
+- [`services/plane/`](../../../services/plane/) — Plane stack configuration and workspace taxonomy
+- [`services/cloudflared/config.yml.template`](../../../services/cloudflared/config.yml.template)
+
+## Workflows
+
+See [README.md](../../../README.md#what-this-system-actually-does) for end-to-end workflow examples showing how self-hosted services participate in persona workflows through MCP servers.
+
+## Customization and extension
+
+### Safe customization pattern
+
+1. Add/update service blocks in [`services/docker-compose.yml`](../../../services/docker-compose.yml).
+2. Add any new variables to [`services/.env.example`](../../../services/.env.example) with placeholder values only.
+3. Prefer loopback binds (`127.0.0.1:host:container`) and explicit healthchecks.
+4. Update corresponding MCP/persona docs so behavior stays discoverable.
+
+### Common extensions
+
+- Swap storage backends or tune resource envelopes for smaller/larger hosts.
+- Add reverse proxy or edge ingress while keeping internal services private.
+- Add domain-specific OSS apps (for example CRM, billing, or observability) and expose them via new MCP servers.
+
+## Boundaries
+
+- This layer owns application/runtime state and persistence.
+- It does not define agent policy, persona authority, or tool safety rules.
+- Persona contracts live in `agent-configs/*/AGENTS.md`; runtime daemons live in `agents/`.

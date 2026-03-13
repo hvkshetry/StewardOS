@@ -1,115 +1,44 @@
 # StewardOS Roadmap
 
-This roadmap tracks the evolution of StewardOS from a local-first integration workspace into a fully self-hosted family-office operating system.
+## Completed
 
-## Phase 1: Data Population and Operational Baselines (Complete)
+- Full estate entity/asset/person graph with recursive ownership chains, jurisdiction tracking, and beneficial interest semantics
+- Portfolio risk engine v2: Student-t ES, illiquid overlay, FX risk, vol regime detection, concentration analysis
+- Risk engine v2.1: regime-conditional stress testing, valuation staleness detection with vol uplift, tax-aware de-risking
+- Household-tax v2 → v3: exact 2025/2026 US+MA individual and fiduciary returns with CTC, AMT, itemized deductions, safe-harbor planning, and golden-file-verified accuracy
+- Finance graph liability tracking: mortgage/HELOC/ARM rate management, amortization schedules, refinance NPV analysis
+- Family-edu PostgreSQL control plane: learner records, milestone tracking, evidence pipeline, activity planning
+- Email-driven autonomous agent runtime: Gmail Pub/Sub → webhook → persona-routed worker → agent execution
+- Scheduled briefing agent with daily/weekly cadence
+- Plane PM integration (Phase 0-2): 59 governance-safe tools across 12 modules, 7 domain-scoped workspaces, webhook + poller event strategy, cross-persona task delegation
+- Persona expansion to 8 roles: added Insurance Advisor, Research Analyst; renamed Investment Officer → Portfolio Manager with PM/RA research delegation split
+- Health-graph-mcp: genome-aware health database replacing health-records-mcp — 23andMe genotype ingestion, clinical variant assertions, pharmacogenomics, polygenic risk scores (27 tools, 10 modules)
+- 57 persona skills across 8 roles (Portfolio Manager, Research Analyst, Household Comptroller, Estate Counsel, Household Director, Wellness Advisor, Insurance Advisor, Chief of Staff)
+- Mail worker hardening: ActionAck model (unified reply/delegate/maintenance), PM session tables, Plane polling loop, delegation via Plane as single source of truth
+- Infrastructure: dropped n8n/Directus/changedetection; added 12-container Plane stack with dedicated Valkey
+- Shared agent lib (`agents/lib/`): pubsub validation, Gmail watch, schedule loader
+- Shared domain lib (`servers/lib/stewardos_lib/`): db, constants, json_utils, domain_ops
+- CI pipeline (`.github/workflows/ci.yml`) and root Makefile test orchestration (411 tests across 19 projects)
+- News provider migration: GDELT → Google News RSS + yfinance for market news
+- OCF (Open Cap Format) ingestion for private company cap table tracking
+- Document lifecycle: Paperless-ngx integration with estate entity linking, review policies, version chain tracking
 
-### Estate graph population
+## In Progress
 
-- complete person/entity/asset records,
-- link key documents to entities and assets,
-- validate recursive ownership paths with real multi-level structures,
-- establish critical date coverage (filings, renewals, distributions).
+- **Runtime consolidation**: migrate agent execution from workstation to server infrastructure — co-locate persona configs and MCP runtimes with core services
+- **Direct ingress**: remove intermediary email relay dependency — run ingress and worker in a direct server-side path
+- **MCP locality**: co-locate MCP servers with service data plane — replace tunnel-based development bridges with local server sockets
 
-### Workflow automation baseline
+## Next
 
-- document ingestion to estate graph,
-- portfolio valuation sync into finance graph,
-- budget cash-position sync into finance graph,
-- critical-date calendar sync.
+- Index fund look-through for concentration risk: decompose ETF holdings into underlying positions for accurate exposure analysis
+- Interactive ownership graph visualization via Plane pages or dedicated UI
+- Deterministic reconciliation workflows with audit trails
+- Community contribution infrastructure: skill testing harness, CI for skill PRs, contributor onboarding automation
 
-## Phase 2: Estate and Financial Service Expansion (Complete)
+## Ongoing
 
-### Estate schema evolution
-
-- obligations and liability linkage,
-- account signer/beneficiary tracking,
-- family relationship modeling,
-- role assignment by entity/jurisdiction.
-
-### Estate MCP expansion
-
-- ownership visualization export tooling,
-- richer cross-entity search and filters,
-- compliance and review-cycle tooling.
-
-### Household tax engine
-
-- TY2025 US federal + MA state conformity,
-- itemized deductions, AMT, child tax credit,
-- golden-file test fixtures for deterministic verification.
-
-### Health graph (assertion-first)
-
-- replaced `health-records-mcp` with `health-graph-mcp`,
-- genomics, clinical assertions, labs, coverage intelligence,
-- characterization tests + DI tests.
-
-## Phase 3: Control Plane and Governance (Complete)
-
-### Plane project management integration
-
-- 58 governance-safe PM tools across 12 modules in `plane-mcp`,
-- 7 domain-scoped workspaces with standard label taxonomy,
-- all write tools validate `PLANE_HOME_WORKSPACE` for governance enforcement,
-- 126 tests with `MockPlaneClient`.
-
-### Persona expansion
-
-- 8 personas (added Insurance Advisor, Research Analyst; renamed Investment Officer to Portfolio Manager),
-- Gmail plus-addressing for per-persona email identity (filters, labels, send-as),
-- skill reorganization: 5 IO skills migrated to Research Analyst.
-
-### Mail worker hardening
-
-- ActionAck model (unified reply/delegate/maintenance),
-- Plane poller for case completion detection,
-- Plane webhook ingress with HMAC-SHA256 verification,
-- PM session tables and delivery-ID idempotency.
-
-### Infrastructure consolidation
-
-- added Plane stack (12 containers + dedicated Valkey),
-- dropped n8n, Directus, changedetection.io,
-- shared agent library (`agents/lib/`) for gmail_watch, pubsub_validation, schedule_loader.
-
-## Phase 4: Runtime Consolidation on Server Infrastructure
-
-### Agent runtime migration
-
-- move agent config execution from workstation to server runtime,
-- co-locate persona configs and MCP runtimes with core services,
-- standardize host-level service templates and deployment scripts.
-
-### Remove intermediary ingress dependency
-
-- retire `agent-mail.<domain>` as a required relay hop,
-- run ingress and worker in a direct server-side path,
-- tighten trust boundaries to internal service network + auth headers.
-
-### Remove SSH tunnel MCP dependency
-
-- run MCP servers adjacent to service data plane,
-- replace tunnel-based local development bridges with local server sockets,
-- update persona config examples to server-local endpoints.
-
-## Phase 5: Release Engineering and Community Readiness
-
-- complete sanitized public examples for all sensitive runtime files,
-- pin upstream/fork dependencies with reproducible bootstrap tooling,
-- document contribution and security workflows,
-- publish stable versioned release notes.
-
-## Ongoing Streams
-
-- security hardening and secret rotation,
-- backup durability and restore testing,
-- OAuth scope minimization,
-- observability and incident runbooks.
-
-### Wellness Data Automation
-
-- automate Apple Health ingestion into the MCP data plane (remove manual zip/csv operator flow),
-- evaluate and productionize push/sync ingestion (open-wearables pilot + fallback cron-based import path),
-- keep direct high-granularity connectors (Peloton API + FitBod CSV/wger pipeline) as primary sources for coaching analytics,
-- enforce freshness checks for Apple Health, Peloton, and wger before weekly wellness email synthesis.
+- Security hardening and secret rotation
+- Backup durability and restore testing
+- OAuth scope minimization
+- Observability and incident runbooks

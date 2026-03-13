@@ -1,44 +1,110 @@
 # systemd Runtime
 
-StewardOS uses systemd-managed services for host-level ingress and automation runtimes.
+StewardOS uses systemd for long-running agent-facing services (ingress, worker, scheduled briefing) while Compose handles the application stack.
 
-## Service Topology
+## Why this exists
 
-Primary host services include:
+The runtime needs always-on daemons with predictable restart behavior, host-native logging, and boot-time recovery.
 
-- **family-office-mail-ingress** — FastAPI webhook for Gmail Pub/Sub and Plane webhooks (home-server, system scope)
-- **family-office-mail-worker** — FastAPI worker that processes inbound email, generates replies, runs Plane poller, and executes scheduled jobs (local machine, user scope)
-- **family-brief-agent** — scheduled briefing/scheduler service (optional)
-- **home-server-db-tunnel** — SSH tunnel connecting local machine to home-server services
-- **cloudflared** — Cloudflare tunnel for external ingress (home-server)
+systemd is used because it provides:
 
-## Mail Pipeline
+- stable lifecycle management for Python/uvicorn processes,
+- restart policies and failure containment,
+- `journalctl` observability for service-level debugging,
+- clean separation from containerized data applications.
 
-The mail pipeline is split across two hosts:
+## What is currently configured
 
-1. Gmail Pub/Sub pushes notifications to Cloudflare tunnel
-2. **Ingress** (home-server) validates OIDC tokens, extracts history IDs, forwards to worker via reverse SSH tunnel
-3. **Worker** (local machine) fetches full messages from Gmail API, routes to persona-specific handlers, generates replies via MCP tool calls
+Tracked service templates:
 
-The worker also runs:
-- **Plane poller** — polls Plane work items for case completion and delegation events
-- **Plane webhook handler** — receives forwarded Plane webhooks from ingress (HMAC-SHA256 verified)
-- **Scheduled jobs** — APScheduler-driven briefings and maintenance tasks loaded from `agents/schedules.yaml`
+- [`agents/family-office-mail-ingress/family-office-mail-ingress.service.example`](../../../agents/family-office-mail-ingress/family-office-mail-ingress.service.example)
+- [`agents/family-office-mail-worker/family-office-mail-worker.service.example`](../../../agents/family-office-mail-worker/family-office-mail-worker.service.example)
+- [`agents/family-brief-agent/family-brief-agent.service.example`](../../../agents/family-brief-agent/family-brief-agent.service.example)
 
-## Deployment Pattern
+Template rendering/installation is automated by:
 
-- service unit templates are tracked as `*.service.example`,
-- production units remain local and host-specific,
-- deployment scripts should render user/path values per host.
+- [`provisioning/configure-systemd.example.sh`](../../../provisioning/configure-systemd.example.sh)
 
-## Reliability Expectations
+### Runtime topology
 
-- restart policy enabled for long-running services,
-- health endpoints exposed for runtime checks (see [ENV Configuration](ENV_CONFIGURATION.md)),
-- logs routed through journald for operational troubleshooting.
+- Ingress service binds loopback `:8311` and validates webhook envelopes (Gmail Pub/Sub and Plane HMAC-SHA256).
+- Worker service binds loopback `:8312` and executes persona workflows via the ActionAck model (unified reply/delegate/maintenance).
+- Brief service binds loopback `:8300` for scheduled/context brief generation.
+- Worker includes a Plane polling loop for detecting case completion and delegation status changes.
+- Compose-hosted systems remain separate and are consumed through MCP/tool calls.
 
-## Related Documentation
+### Gmail automation path
 
-- [AI Agent Architecture Primer](../../../AI_AGENT_ARCHITECTURE_PRIMER.md) — split-host topology, port mappings, what-to-restart-when
-- [ENV Configuration](ENV_CONFIGURATION.md) — required env vars, pydantic-settings behavior, incident runbook
-- [Plane Workspaces](../../../services/plane/WORKSPACES.md) — workspace domain taxonomy
+The full email automation pipeline works as follows:
+
+1. **Gmail Pub/Sub push** delivers a notification to the ingress endpoint (`:8311`).
+2. **Ingress validates the envelope signature** (Google Cloud Pub/Sub message authentication) and rejects invalid payloads.
+3. **Ingress forwards the validated message** internally to the worker service (`:8312`).
+4. **Worker extracts the recipient alias** from the incoming message headers (e.g., `investment-officer@<domain>`).
+5. **Worker resolves the persona** by loading the contract from `agent-configs/<alias>/AGENTS.md` and runtime config from `agent-configs/<alias>/.codex/config.toml`.
+6. **Worker executes within persona boundaries** — the persona's MCP server access, skill set, and escalation rules are enforced.
+7. **Worker replies via `google-workspace-mcp`** using the persona's configured `from_email` alias and structured completion contract.
+
+### Plane webhook path
+
+1. **Plane sends a webhook** to the ingress endpoint (`:8311`) when work items are created, updated, or transitioned.
+2. **Ingress validates the HMAC-SHA256 signature** and rejects invalid payloads.
+3. **Ingress forwards the validated event** to the worker service (`:8312`) at `/internal/family-office/plane-webhook`.
+4. **Worker checks delivery-ID idempotency** and routes the event to the appropriate persona based on workspace mapping.
+5. **Worker executes the persona workflow** (e.g., Research Analyst picks up a delegated comps analysis from Portfolio Manager).
+
+### Scheduled briefing path
+
+1. Brief service runs cron-triggered jobs at configured intervals.
+2. It invokes the configured agent runtime with persona rules (e.g., Portfolio Manager for morning briefings, Chief of Staff for weekly reviews).
+3. Output is delivered through configured communication channels (email, memos).
+
+### Environment management
+
+Each systemd service loads its runtime configuration from a local `.env` file via the systemd `EnvironmentFile=` directive. Template `.env` files are rendered by the provisioning script (`provisioning/configure-systemd.example.sh`) during deployment, replacing placeholder values with deployment-specific secrets and paths.
+
+### Dependency ordering
+
+systemd services require the Docker Compose application stack to be running — Compose services provide the data plane that MCP servers connect to. The systemd units use `After=network.target` but do not declare explicit Compose dependencies; operators should ensure `docker compose up -d` completes before starting agent services.
+
+## Workflows
+
+See [README.md](../../../README.md#autonomous-agent-runtime) for end-to-end workflow examples showing how the agent runtime executes persona-scoped workflows.
+
+## Operations and observability
+
+Typical commands (host):
+
+```bash
+sudo systemctl status family-office-mail-ingress
+sudo systemctl status family-office-mail-worker
+sudo systemctl status family-brief-agent
+sudo journalctl -u family-office-mail-worker -n 200 --no-pager
+```
+
+Expected operational posture:
+
+- `Restart=always` for core daemons.
+- Loopback binds by default.
+- Environment loaded from local `.env` files via `EnvironmentFile=` directive.
+
+## Customization and extension
+
+### Add a new runtime daemon
+
+1. Add app code under `agents/<service-name>/`.
+2. Create `<service-name>.service.example` with placeholder user/paths.
+3. Extend provisioning template script to render/install the new unit.
+4. Document port, health endpoint, and failure behavior.
+
+### Harden runtime boundaries
+
+- Run as dedicated non-root system user.
+- Keep public ingress through a controlled reverse proxy only.
+- Add health probes and lightweight smoke checks for each service.
+
+## Boundaries
+
+- systemd runtime manages process lifecycle only.
+- It does not define persona behavior, skill logic, or tool access policy.
+- Those contracts remain in `agent-configs/`, `skills/`, and MCP server configs.
