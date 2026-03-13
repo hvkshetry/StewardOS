@@ -3,7 +3,7 @@ set -euo pipefail
 
 STEWARD_USER="<YOUR_USER>"
 STEWARD_ROOT="/home/${STEWARD_USER}/stewardos"
-REPO_URL="https://github.com/hvkshetry/StewardOS.git"
+REPO_URL="https://github.com/stewardos-user/StewardOS.git"
 BRANCH="main"
 
 sudo apt-get update
