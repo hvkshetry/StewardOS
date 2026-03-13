@@ -1,20 +1,19 @@
 #!/bin/bash
-# backup-personal.sh - Daily backup for self-hosted services stack
-# Example cron: 0 3 * * * /path/to/stewardos/services/backup-personal.sh
+# backup-personal.sh - Daily backup for personal services stack
+# Run via cron: 0 3 * * * $STEWARDOS_ROOT/services/backup-personal.sh
 set -euo pipefail
 
 BACKUP_DIR="/backup/personal"
 LOG_FILE="/var/log/personal-backup.log"
 RETENTION_DAYS=60
 DATE=$(date +%Y-%m-%d_%H%M%S)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-COMPOSE_DIR="${COMPOSE_DIR:-$SCRIPT_DIR}"
+COMPOSE_DIR="$STEWARDOS_ROOT/services"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
 }
 
-log "=== StewardOS services backup started ==="
+log "=== Personal services backup started ==="
 
 # Ensure backup directories exist
 mkdir -p "$BACKUP_DIR/postgres"
@@ -23,7 +22,7 @@ mkdir -p "$BACKUP_DIR/volumes"
 
 # ─── 1. PostgreSQL database dumps ───
 log "Dumping PostgreSQL databases..."
-for db in ghostfolio paperless wger n8n postgres; do
+for db in ghostfolio paperless wger estate_planning finance_graph household_tax family_edu health_graph plane postgres; do
     DUMP_FILE="$BACKUP_DIR/postgres/${db}_${DATE}.sql"
     if docker exec personal-db pg_dump -U postgres -d "$db" > "$DUMP_FILE" 2>>"$LOG_FILE"; then
         gzip "$DUMP_FILE"
@@ -32,15 +31,6 @@ for db in ghostfolio paperless wger n8n postgres; do
         log "  FAIL: $db dump failed"
     fi
 done
-
-# Estate schema (separate dump for easy restore)
-ESTATE_DUMP="$BACKUP_DIR/postgres/estate_${DATE}.sql"
-if docker exec personal-db pg_dump -U postgres -d personal -n estate > "$ESTATE_DUMP" 2>>"$LOG_FILE"; then
-    gzip "$ESTATE_DUMP"
-    log "  OK: estate schema -> ${ESTATE_DUMP}.gz"
-else
-    log "  FAIL: estate schema dump failed"
-fi
 
 # ─── 2. SQLite database copies ───
 log "Copying SQLite databases..."
@@ -104,7 +94,7 @@ fi
 
 # ─── 3. Tar critical volumes ───
 log "Archiving named volumes..."
-for vol in vaultwarden-data paperless-data paperless-media changedetection-data; do
+for vol in vaultwarden-data paperless-data paperless-media plane-minio-data; do
     VOL_PATH=$(docker volume inspect "$vol" --format '{{ .Mountpoint }}' 2>/dev/null || echo "")
     if [ -n "$VOL_PATH" ] && [ -d "$VOL_PATH" ]; then
         TAR_FILE="$BACKUP_DIR/volumes/${vol}_${DATE}.tar.gz"
@@ -120,4 +110,4 @@ log "Cleaning up backups older than ${RETENTION_DAYS} days..."
 DELETED=$(find "$BACKUP_DIR" -type f \( -name "*.gz" -o -name "*.sql" -o -name "*.db" \) -mtime +${RETENTION_DAYS} -delete -print | wc -l)
 log "  Removed $DELETED old backup files"
 
-log "=== StewardOS services backup completed ==="
+log "=== Personal services backup completed ==="

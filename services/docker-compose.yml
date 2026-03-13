@@ -1,5 +1,5 @@
 services:
-  # ─── PostgreSQL (shared by paperless-ngx + ghostfolio + wger + n8n + graph apps) ───
+  # ─── PostgreSQL (shared by paperless-ngx + ghostfolio + wger) ───
   personal-db:
     image: postgres:16.6
     container_name: personal-db
@@ -17,11 +17,9 @@ services:
       -c maintenance_work_mem=128MB
       -c wal_buffers=16MB
       -c checkpoint_completion_target=0.9
+      -c max_connections=1000
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      ESTATE_DB_PASSWORD: ${ESTATE_DB_PASSWORD}
-      FINANCE_DB_PASSWORD: ${FINANCE_DB_PASSWORD}
-      N8N_DB_PASSWORD: ${N8N_DB_PASSWORD}
     volumes:
       - personal-db-data:/var/lib/postgresql/data
       - ./personal-db/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
@@ -36,7 +34,7 @@ services:
     networks:
       - personal-net
 
-  # ─── Redis (shared by paperless-ngx + ghostfolio + wger) ───
+  # ─── Redis (shared by paperless-ngx + ghostfolio) ───
   personal-redis:
     image: redis:7-alpine
     container_name: personal-redis
@@ -110,8 +108,9 @@ services:
       PAPERLESS_TASK_WORKERS: "1"
       PAPERLESS_ENABLE_NLTK: "false"
       PAPERLESS_SECRET_KEY: ${PAPERLESS_SECRET_KEY}
-      PAPERLESS_URL: ${PAPERLESS_URL}
-      PAPERLESS_APP_TITLE: ${PAPERLESS_APP_TITLE:-StewardOS Documents}
+      PAPERLESS_URL: https://docs.stewardos.example.com
+      PAPERLESS_APP_TITLE: "StewardOS Documents"
+      # PAPERLESS_APP_LOGO: "/logo/your-logo.jpg"
     volumes:
       - paperless-data:/usr/src/paperless/data
       - paperless-media:/usr/src/paperless/media
@@ -147,6 +146,7 @@ services:
       REDIS_HOST: personal-redis
       REDIS_PORT: "6379"
       REDIS_DB: "1"
+      # Throttle Yahoo-backed background workers to avoid 429 rate-limit lockouts.
       PROCESSOR_GATHER_ASSET_PROFILE_CONCURRENCY: "${GHOSTFOLIO_PROCESSOR_GATHER_ASSET_PROFILE_CONCURRENCY:-1}"
       PROCESSOR_GATHER_HISTORICAL_MARKET_DATA_CONCURRENCY: "${GHOSTFOLIO_PROCESSOR_GATHER_HISTORICAL_MARKET_DATA_CONCURRENCY:-1}"
       ACCESS_TOKEN_SALT: ${GHOSTFOLIO_ACCESS_TOKEN_SALT}
@@ -174,7 +174,7 @@ services:
     environment:
       ALLOW_SIGNUP: "false"
       TZ: America/New_York
-      BASE_URL: ${MEALIE_BASE_URL}
+      BASE_URL: https://meals.stewardos.example.com
     volumes:
       - mealie-data:/app/data
     mem_limit: 512m
@@ -199,6 +199,7 @@ services:
       - "127.0.0.1:5006:5006"
     volumes:
       - actual-data:/data
+    # 128m proved too tight under concurrent sync traffic and triggered OOM kills.
     mem_limit: 512m
     cpus: 1.0
     healthcheck:
@@ -257,32 +258,6 @@ services:
     networks:
       - personal-net
 
-  # ─── Change Detection (website monitoring) ───
-  changedetection:
-    image: dgtlmoon/changedetection.io:0.54.1
-    container_name: changedetection
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    extra_hosts:
-      - "host.docker.internal:0.0.0.0"
-    ports:
-      - "127.0.0.1:5000:5000"
-    environment:
-      BASE_URL: ${CHANGEDETECTION_BASE_URL}
-    volumes:
-      - changedetection-data:/datastore
-    mem_limit: 512m
-    cpus: 1.0
-    healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/')\""]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 15s
-    networks:
-      - personal-net
-
   # ─── Grocy (pantry inventory) ───
   grocy:
     image: lscr.io/linuxserver/grocy:4.5.0
@@ -311,7 +286,7 @@ services:
 
   # ─── wger (workout & nutrition tracker) ───
   wger-web:
-    image: wger/server:2.3-dev
+    image: wger/server:2.3-dev@sha256:c63947d589c115e777b99154422599a5b23e9314268c9603210bbd047598a9f9
     container_name: wger-web
     restart: unless-stopped
     security_opt:
@@ -336,8 +311,8 @@ services:
       DJANGO_CACHE_CLIENT_CLASS: django_redis.client.DefaultClient
       CELERY_BROKER: redis://personal-redis:6379/2
       CELERY_BACKEND: redis://personal-redis:6379/2
-      SITE_URL: ${WGER_SITE_URL}
-      CSRF_TRUSTED_ORIGINS: ${WGER_CSRF_TRUSTED_ORIGINS}
+      SITE_URL: https://fitness.stewardos.example.com
+      CSRF_TRUSTED_ORIGINS: https://fitness.stewardos.example.com
       X_FORWARDED_PROTO_HEADER_SET: "True"
       SECRET_KEY: ${WGER_SECRET_KEY}
       DJANGO_PERFORM_MIGRATIONS: "True"
@@ -362,7 +337,7 @@ services:
       - personal-net
 
   wger-celery-worker:
-    image: wger/server:2.3-dev
+    image: wger/server:2.3-dev@sha256:c63947d589c115e777b99154422599a5b23e9314268c9603210bbd047598a9f9
     container_name: wger-celery-worker
     restart: unless-stopped
     security_opt:
@@ -380,7 +355,7 @@ services:
       - personal-net
 
   wger-celery-beat:
-    image: wger/server:2.3-dev
+    image: wger/server:2.3-dev@sha256:c63947d589c115e777b99154422599a5b23e9314268c9603210bbd047598a9f9
     container_name: wger-celery-beat
     restart: unless-stopped
     security_opt:
@@ -396,7 +371,7 @@ services:
       - personal-net
 
   wger-nginx:
-    image: nginx:stable-alpine
+    image: nginx:1.28.2-alpine3.23
     container_name: wger-nginx
     restart: unless-stopped
     security_opt:
@@ -420,84 +395,6 @@ services:
     networks:
       - personal-net
 
-  # ─── Directus (estate graph UI) ───
-  directus:
-    image: directus/directus:latest
-    container_name: directus
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    ports:
-      - "127.0.0.1:8290:8055"
-    depends_on:
-      personal-db:
-        condition: service_healthy
-    environment:
-      DB_CLIENT: pg
-      DB_HOST: personal-db
-      DB_PORT: "5432"
-      DB_DATABASE: estate_planning
-      DB_USER: estate
-      DB_PASSWORD: ${ESTATE_DB_PASSWORD}
-      DB_SEARCH_PATH: estate
-      SECRET: ${DIRECTUS_SECRET}
-      ADMIN_EMAIL: ${DIRECTUS_ADMIN_EMAIL}
-      ADMIN_PASSWORD: ${DIRECTUS_ADMIN_PASSWORD}
-      PUBLIC_URL: ${DIRECTUS_PUBLIC_URL}
-    volumes:
-      - directus-data:/directus/uploads
-      - directus-extensions:/directus/extensions
-    mem_limit: 512m
-    cpus: 1.0
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://0.0.0.0:8055/server/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    networks:
-      - personal-net
-
-  # ─── n8n (workflow automation) ───
-  n8n:
-    image: n8nio/n8n:latest
-    container_name: n8n
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    ports:
-      - "127.0.0.1:5678:5678"
-    depends_on:
-      personal-db:
-        condition: service_healthy
-    environment:
-      N8N_HOST: ${N8N_HOST}
-      N8N_PROTOCOL: ${N8N_PROTOCOL:-https}
-      N8N_PORT: "5678"
-      WEBHOOK_URL: ${N8N_WEBHOOK_URL}
-      DB_TYPE: postgresdb
-      DB_POSTGRESDB_HOST: personal-db
-      DB_POSTGRESDB_PORT: "5432"
-      DB_POSTGRESDB_DATABASE: n8n
-      DB_POSTGRESDB_USER: n8n
-      DB_POSTGRESDB_PASSWORD: ${N8N_DB_PASSWORD}
-      N8N_BASIC_AUTH_ACTIVE: "true"
-      N8N_BASIC_AUTH_USER: ${N8N_AUTH_USER}
-      N8N_BASIC_AUTH_PASSWORD: ${N8N_AUTH_PASSWORD}
-      TZ: America/New_York
-    volumes:
-      - n8n_data:/home/node/.n8n
-    mem_limit: 256m
-    cpus: 1.0
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:5678/healthz || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    networks:
-      - personal-net
-
   # ─── Watchtower (automatic Docker image updates) ───
   watchtower:
     image: containrrr/watchtower:latest
@@ -508,6 +405,7 @@ services:
     environment:
       TZ: America/New_York
       WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_LABEL_ENABLE: "true"
       WATCHTOWER_SCHEDULE: "0 0 4 * * *"
       WATCHTOWER_INCLUDE_STOPPED: "false"
       WATCHTOWER_ROLLING_RESTART: "true"
@@ -519,6 +417,252 @@ services:
     cpus: 0.5
     networks:
       - personal-net
+
+  # ─── Plane PM (project management) ───
+  plane-valkey:
+    image: valkey/valkey:7.2-alpine
+    container_name: plane-valkey
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command: valkey-server --save 60 1 --loglevel warning
+    volumes:
+      - plane-valkey-data:/data
+    mem_limit: 256m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    networks:
+      - personal-net
+
+  plane-mq:
+    image: rabbitmq:3.13-alpine
+    container_name: plane-mq
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      RABBITMQ_DEFAULT_USER: ${PLANE_RABBITMQ_USER:-plane}
+      RABBITMQ_DEFAULT_PASS: ${PLANE_RABBITMQ_PASSWORD}
+      RABBITMQ_DEFAULT_VHOST: plane
+    volumes:
+      - plane-mq-data:/var/lib/rabbitmq
+    mem_limit: 256m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - personal-net
+
+  plane-minio:
+    image: minio/minio:latest
+    container_name: plane-minio
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command: server /data --console-address ":9090"
+    environment:
+      MINIO_ROOT_USER: ${PLANE_MINIO_ROOT_USER:-plane}
+      MINIO_ROOT_PASSWORD: ${PLANE_MINIO_ROOT_PASSWORD}
+    volumes:
+      - plane-minio-data:/data
+    mem_limit: 256m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    networks:
+      - personal-net
+
+  plane-migrator:
+    image: makeplane/plane-backend:stable
+    container_name: plane-migrator
+    restart: "no"
+    command: ./bin/docker-entrypoint-migrator.sh
+    depends_on:
+      personal-db:
+        condition: service_healthy
+      plane-valkey:
+        condition: service_healthy
+    environment: &plane-env
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@personal-db:5432/plane
+      REDIS_URL: redis://plane-valkey:6379/
+      RABBITMQ_HOST: plane-mq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: ${PLANE_RABBITMQ_USER:-plane}
+      RABBITMQ_PASSWORD: ${PLANE_RABBITMQ_PASSWORD}
+      RABBITMQ_VHOST: plane
+      AWS_ACCESS_KEY_ID: ${PLANE_MINIO_ROOT_USER:-plane}
+      AWS_SECRET_ACCESS_KEY: ${PLANE_MINIO_ROOT_PASSWORD}
+      AWS_S3_ENDPOINT_URL: http://plane-minio:9000
+      AWS_S3_BUCKET_NAME: plane-uploads
+      AWS_REGION: ""
+      USE_MINIO: "1"
+      SECRET_KEY: ${PLANE_SECRET_KEY}
+      MACHINE_SIGNATURE: ${PLANE_MACHINE_SIGNATURE}
+      WEB_URL: https://pm.stewardos.example.com
+      CORS_ALLOWED_ORIGINS: https://pm.stewardos.example.com
+      API_KEY_RATE_LIMIT: "300/minute"
+      GUNICORN_WORKERS: "1"
+    mem_limit: 128m
+    cpus: 0.5
+    networks:
+      - personal-net
+
+  plane-api:
+    image: makeplane/plane-backend:stable
+    container_name: plane-api
+    restart: unless-stopped
+    command: ./bin/docker-entrypoint-api.sh
+    depends_on:
+      personal-db:
+        condition: service_healthy
+      plane-valkey:
+        condition: service_healthy
+      plane-mq:
+        condition: service_healthy
+      plane-migrator:
+        condition: service_completed_successfully
+    environment:
+      <<: *plane-env
+    mem_limit: 512m
+    cpus: 1.0
+    networks:
+      personal-net:
+        aliases:
+          - api
+
+  plane-worker:
+    image: makeplane/plane-backend:stable
+    container_name: plane-worker
+    restart: unless-stopped
+    command: ./bin/docker-entrypoint-worker.sh
+    depends_on:
+      plane-api:
+        condition: service_started
+    environment:
+      <<: *plane-env
+    mem_limit: 512m
+    cpus: 1.0
+    networks:
+      - personal-net
+
+  plane-beat:
+    image: makeplane/plane-backend:stable
+    container_name: plane-beat
+    restart: unless-stopped
+    command: ./bin/docker-entrypoint-beat.sh
+    depends_on:
+      plane-api:
+        condition: service_started
+    environment:
+      <<: *plane-env
+    mem_limit: 128m
+    cpus: 0.5
+    networks:
+      - personal-net
+
+  plane-web:
+    image: makeplane/plane-frontend:stable
+    container_name: plane-web
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    cpus: 1.0
+    networks:
+      personal-net:
+        aliases:
+          - web
+
+  plane-admin:
+    image: makeplane/plane-admin:stable
+    container_name: plane-admin
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    cpus: 0.5
+    networks:
+      personal-net:
+        aliases:
+          - admin
+
+  plane-space:
+    image: makeplane/plane-space:stable
+    container_name: plane-space
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 192m
+    cpus: 0.5
+    networks:
+      personal-net:
+        aliases:
+          - space
+
+  plane-live:
+    image: makeplane/plane-live:stable
+    container_name: plane-live
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      plane-valkey:
+        condition: service_healthy
+    environment:
+      API_BASE_URL: http://api:8000
+      REDIS_URL: redis://plane-valkey:6379/
+      LIVE_SENTRY_DSN: ""
+      LIVE_SENTRY_ENVIRONMENT: ""
+      LIVE_SENTRY_TRACES_SAMPLE_RATE: ""
+    mem_limit: 256m
+    cpus: 0.5
+    networks:
+      personal-net:
+        aliases:
+          - live
+
+  plane-proxy:
+    image: makeplane/plane-proxy:stable
+    container_name: plane-proxy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:8082:80"
+    depends_on:
+      - plane-web
+      - plane-api
+      - plane-space
+      - plane-admin
+      - plane-live
+    environment:
+      FILE_SIZE_LIMIT: 5242880
+      BUCKET_NAME: plane-uploads
+      SITE_ADDRESS: ":80"
+    mem_limit: 32m
+    cpus: 0.5
+    networks:
+      - personal-net
+
+  # ─── Cloudflared ───
+  # Removed: cloudflared Docker container is no longer used.
+  # All tunnel routing (SSH + web services) is handled by the host-level
+  # systemd cloudflared service (/etc/systemd/system/cloudflared.service).
+  # Ingress rules are configured in the Cloudflare Zero Trust dashboard
+  # (TUNNEL_TOKEN mode) and point to localhost ports.
 
 networks:
   personal-net:
@@ -535,10 +679,9 @@ volumes:
   actual-data:
   memos-data:
   homebox-data:
-  changedetection-data:
   grocy-data:
   wger-static:
   wger-media:
-  directus-data:
-  directus-extensions:
-  n8n_data:
+  plane-valkey-data:
+  plane-mq-data:
+  plane-minio-data:

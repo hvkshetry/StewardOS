@@ -19,8 +19,8 @@ ingress:
     service: http://memos:5230
   - hostname: home.example.com
     service: http://homebox:7745
-  - hostname: alerts.example.com
-    service: http://changedetection:5000
+  - hostname: pm.example.com
+    service: http://plane-proxy:80
   - hostname: pantry.example.com
     service: http://grocy:80
   - hostname: agent.example.com
@@ -29,8 +29,4 @@ ingress:
     service: http://localhost:8311
   - hostname: fitness.example.com
     service: http://wger-nginx:80
-  - hostname: estate.example.com
-    service: http://directus:8055
-  - hostname: workflows.example.com
-    service: http://n8n:5678
   - service: http_status:404
