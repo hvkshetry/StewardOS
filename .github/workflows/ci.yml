@@ -1,0 +1,194 @@
+name: CI
+
+on:
+  push:
+    branches: [main, private-main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv tool install ruff
+      - run: ruff check servers/ agents/ scripts/
+
+  verify-skills:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python scripts/verify_skill_tool_refs.py
+
+  test-repo-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Run repo smoke tests
+        run: uv run --no-project --with pytest pytest tests/test_repo_smoke.py -v
+
+  test-servers:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - servers/lib
+          - servers/estate-planning-mcp
+          - servers/finance-graph-mcp
+          - servers/family-edu-mcp
+          - servers/health-graph-mcp
+          - servers/household-tax-mcp
+          - servers/investing-workspace/portfolio-analytics
+          - agents/family-office-mail-worker
+          - agents/family-office-mail-ingress
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Run tests
+        working-directory: ${{ matrix.project }}
+        run: uv run --extra dev pytest $(find tests -maxdepth 1 -name 'test_*.py' | sort) -v
+        env:
+          DATABASE_URL: ""
+          GHOSTFOLIO_URL: ""
+          GHOSTFOLIO_TOKEN: ""
+          GOOGLE_CREDENTIALS_PATH: ""
+
+  test-thin-wrappers:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: servers/homebox-mcp
+            test_target: tests/test_envelopes.py
+          - project: servers/grocy-mcp
+            test_target: tests/test_envelopes.py
+          - project: servers/memos-mcp
+            test_target: tests/test_envelopes.py
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Run wrapper tests
+        working-directory: ${{ matrix.project }}
+        run: uv run --with pytest pytest ${{ matrix.test_target }} -v
+        env:
+          DATABASE_URL: ""
+
+  test-investing-workspace:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dir: servers/investing-workspace/market-intel-direct
+            test_target: tests/test_market_temperature.py tests/test_ranking_and_degraded.py
+          - dir: servers/investing-workspace/policy-events
+            test_target: tests/test_server.py
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Run project tests
+        working-directory: ${{ matrix.dir }}
+        run: uv run --project .. --extra dev pytest ${{ matrix.test_target }} -v
+        env:
+          DATABASE_URL: ""
+          GHOSTFOLIO_URL: ""
+          GHOSTFOLIO_TOKEN: ""
+          RENTCAST_API_KEY: ""
+          GOOGLE_CREDENTIALS_PATH: ""
+
+  test-characterization:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: agents/family-brief-agent
+            test_target: tests/test_main_characterization.py tests/test_scheduler_characterization.py
+          - project: servers/ghostfolio-mcp
+            test_target: tests/test_portfolio_snapshot.py
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Run characterization tests
+        working-directory: ${{ matrix.project }}
+        run: uv run --with pytest pytest ${{ matrix.test_target }} -v
+        env:
+          DATABASE_URL: ""
+          GHOSTFOLIO_URL: ""
+          GHOSTFOLIO_TOKEN: ""
+          GOOGLE_CREDENTIALS_PATH: ""
+
+  test-db-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: stewardos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d stewardos_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: servers/finance-graph-mcp
+            test_file: tests/test_postgres_integration.py
+          - project: servers/estate-planning-mcp
+            test_file: tests/test_postgres_integration.py
+          - project: servers/health-graph-mcp
+            test_file: tests/test_postgres_integration.py
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Run Postgres integration tests
+        working-directory: ${{ matrix.project }}
+        run: uv run --extra dev pytest ${{ matrix.test_file }} -v
+        env:
+          DATABASE_URL: ""
+          STEWARDOS_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/stewardos_test
+
+  import-check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dir: servers/estate-planning-mcp
+          - dir: servers/finance-graph-mcp
+          - dir: servers/health-graph-mcp
+          - dir: servers/household-tax-mcp
+          - dir: servers/ghostfolio-mcp
+          - dir: servers/homebox-mcp
+          - dir: servers/grocy-mcp
+          - dir: servers/memos-mcp
+          - dir: servers/wger-mcp
+          - dir: servers/family-edu-mcp
+          - dir: servers/investing-workspace/portfolio-analytics
+          - dir: servers/investing-workspace/market-intel-direct
+          - dir: servers/investing-workspace/policy-events
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Verify import
+        working-directory: ${{ matrix.dir }}
+        run: uv run python -c "import server; print('OK')"
+        env:
+          DATABASE_URL: ""
+          GHOSTFOLIO_URL: ""
+          GHOSTFOLIO_TOKEN: ""
+          RENTCAST_API_KEY: ""
+          GOOGLE_CREDENTIALS_PATH: ""

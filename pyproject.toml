@@ -1,0 +1,17 @@
+# Root-level configuration — NOT a package definition.
+# Provides unified ruff linting config across the monorepo.
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src", "server"]
+
+[tool.pytest.ini_options]
+norecursedirs = [".git", ".venv", "node_modules", "dist", "build"]
+testpaths = ["tests"]
