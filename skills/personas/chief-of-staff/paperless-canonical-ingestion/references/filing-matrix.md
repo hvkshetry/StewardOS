@@ -22,7 +22,7 @@ Do not hardcode IDs across environments.
 ## Domain Tagging
 Apply one or more domain tags as applicable.
 - `india-tax-case`
-- `circle-h2o`
+- `example-holdings`
 - `309-springs-road`
 - `trust-irrevocable`
 - `will-estate`

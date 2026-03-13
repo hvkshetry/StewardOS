@@ -1,0 +1,4 @@
+interface:
+  display_name: "Paperless Canonical Ingestion"
+  short_description: "Canonical ingest to Paperless from Drive and Office docs"
+  default_prompt: "Use $paperless-canonical-ingestion to dedupe and upsert canonical records into Paperless."

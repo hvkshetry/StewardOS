@@ -65,14 +65,15 @@ Expected Shortfall at 97.5% confidence must remain below 2.5%. This is the bindi
 
 ## Holistic Tax Planning
 
-For tax decisions that span both investment and household income, coordinate with
-**household-tax-mcp** (in personal-finance agent config):
-- `estimate_quarterly_1040es` — includes investment income in quarterly estimate
-- `compare_tax_scenarios` — model impact of Roth conversions, additional capital gains, etc.
-- `compute_schedule_se` — relevant if self-employment income interacts with investment income
+For tax decisions that span both investment and household income, treat
+**household-tax-mcp** as an exact, fail-closed engine with a narrow 2026 `US`
+and `MA` support surface. Use `assess_exact_support` first, then the exact return
+and safe-harbor/distribution tools only when the case fits. For Roth
+conversions, broad gain realization, or other unsupported scenarios, state that
+exact household-tax support is unavailable and keep the tax discussion bounded.
 
-The investing-workspace tax servers handle investment-specific tax (wash sales, TLH,
-cost basis). household-tax-mcp handles the full 1040 picture including SE tax.
+The investing-workspace tax servers still handle investment-specific tax (wash
+sales, TLH, cost basis).
 
 ## Key Rules
 

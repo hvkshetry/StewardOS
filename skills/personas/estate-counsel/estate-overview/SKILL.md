@@ -27,6 +27,8 @@ description: |
 
 - Use `estate-planning` for legal ownership, succession structure, and compliance-state reporting.
 - Use `finance-graph` for valuation history and statement facts (PL/CFS/BS, XBRL/OCF).
+- Use `us-legal.search_court_opinions` for case law context on trust/estate structuring decisions.
+- Use `us-legal.search_bills` for pending trust/estate legislation that may affect structuring.
 - Do not write finance-fact payloads back into estate-planning records.
 - If tax modeling is needed from this workflow, hand off to `household-tax`.
 

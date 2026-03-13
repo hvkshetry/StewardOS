@@ -2,17 +2,16 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { Client } from '$STEWARDOS_ROOT/servers/actual-mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
+import { StdioClientTransport } from '$STEWARDOS_ROOT/servers/actual-mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const REPO_ROOT = path.resolve(__dirname, '../../../');
 
 const PAYLOAD_PATH = process.env.INGESTION_PAYLOAD_PATH || path.resolve(__dirname, '../output/ingestion_payload.json');
 const OUTPUT_PATH = process.env.INGESTION_RESULT_PATH || path.resolve(__dirname, '../output/actual_remote_reconcile_result.json');
-const MCP_SERVER_CWD = process.env.ACTUAL_MCP_SERVER_CWD || path.join(REPO_ROOT, 'servers/actual-mcp');
-const MCP_SERVER_ENTRY = process.env.ACTUAL_MCP_SERVER_ENTRY || path.join(REPO_ROOT, 'servers/actual-mcp/build/index.js');
+const MCP_SERVER_CWD = process.env.ACTUAL_MCP_SERVER_CWD || '$STEWARDOS_ROOT/servers/actual-mcp';
+const MCP_SERVER_ENTRY = process.env.ACTUAL_MCP_SERVER_ENTRY || '$STEWARDOS_ROOT/servers/actual-mcp/build/index.js';
 const REQUIRED_SYNC_ID = process.env.ACTUAL_BUDGET_SYNC_ID || '';
 const CANONICAL_BUDGET_NAME = process.env.ACTUAL_TARGET_BUDGET_NAME || 'Household Budget';
 const CHUNK_SIZE = Number(process.env.INGESTION_CHUNK_SIZE || 100);
@@ -168,7 +167,7 @@ async function main() {
       ACTUAL_DATA_DIR: process.env.ACTUAL_DATA_DIR || '/tmp/actual-remote-reconcile',
       ACTUAL_SERVER_URL: process.env.ACTUAL_SERVER_URL || '',
       PATH: process.env.PATH || '',
-      HOME: process.env.HOME || '/tmp',
+      HOME: process.env.HOME || '/home/stewardos-user',
       LANG: process.env.LANG || 'C.UTF-8',
     },
     stderr: 'pipe',

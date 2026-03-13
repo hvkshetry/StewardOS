@@ -1,4 +1,4 @@
-model = "gpt-5.3-codex"
+model = "gpt-5.4"
 model_reasoning_effort = "xhigh"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
@@ -20,23 +20,23 @@ cwd = "/path/to/stewardos/servers/google-workspace-mcp"
 startup_timeout_sec = 60
 env = { WORKSPACE_MCP_CREDENTIALS_DIR = "/path/to/stewardos/agent-configs/.shared-google-creds-agent-rw", USER_GOOGLE_EMAIL = "agent.mailbox@example.com", WORKSPACE_MCP_PORT = "8023", GOOGLE_OAUTH_CLIENT_ID = "${GOOGLE_OAUTH_CLIENT_ID}", GOOGLE_OAUTH_CLIENT_SECRET = "${GOOGLE_OAUTH_CLIENT_SECRET}" }
 
-[mcp_servers.health-records]
+[mcp_servers.health-graph]
 command = "uv"
 args = ["run", "python", "server.py"]
-cwd = "/path/to/stewardos/servers/health-records-mcp"
-env = { PAPERLESS_URL = "http://localhost:8223", PAPERLESS_API_TOKEN = "${PAPERLESS_API_TOKEN}" }
+cwd = "/path/to/stewardos/servers/health-graph-mcp"
+env = { PAPERLESS_URL = "http://localhost:8223", PAPERLESS_API_TOKEN = "${PAPERLESS_API_TOKEN}", OPEN_TARGETS_GRAPHQL_ENDPOINT = "https://api.platform.opentargets.org/api/v4/graphql" }
 
 [mcp_servers.wger]
 command = "uv"
 args = ["run", "python", "server.py"]
 cwd = "/path/to/stewardos/servers/wger-mcp"
-env = { WGER_URL = "http://localhost:8280", WGER_API_TOKEN = "${WGER_API_TOKEN}" }
+env = { WGER_URL = "http://localhost:8280", WGER_API_TOKEN = "${WGER_API_TOKEN}", FITBOD_MAPPING_PATH = "/path/to/stewardos/data/fitbod/exercise-map.json", FITBOD_IMPORT_LEDGER_PATH = "/path/to/stewardos/data/fitbod/import-ledger.json", FITBOD_DEFAULT_TIMEZONE = "America/New_York" }
 
 [mcp_servers.oura]
 command = "node"
 args = ["build/index.js"]
 cwd = "/path/to/stewardos/servers/oura-mcp"
-env = { OURA_PAT = "${OURA_PAT}" }
+env = { OURA_PERSONAL_ACCESS_TOKEN = "${OURA_PAT}" }
 
 [mcp_servers.apple-health]
 command = "node"
@@ -46,6 +46,15 @@ env = { HEALTH_DATA_DIR = "/path/to/stewardos/data/apple-health" }
 
 [mcp_servers.paperless]
 command = "node"
-args = ["build/index.js"]
+args = ["build/index.js", "http://localhost:8223", "${PAPERLESS_TOKEN}"]
 cwd = "/path/to/stewardos/servers/paperless-mcp"
-env = { PAPERLESS_URL = "http://localhost:8223", API_KEY = "${PAPERLESS_TOKEN}" }
+startup_timeout_sec = 45
+
+# Enable only after probe_peloton_value.py passes strict gate criteria.
+#[mcp_servers.peloton]
+#command = "uv"
+#args = ["run", "python", "server.py"]
+#cwd = "/path/to/stewardos/servers/peloton-mcp"
+#env = { PELOTON_OAUTH_CLIENT_ID = "${PELOTON_OAUTH_CLIENT_ID}", PELOTON_OAUTH_REFRESH_TOKEN = "${PELOTON_OAUTH_REFRESH_TOKEN}", PELOTON_OAUTH_TOKEN_STORE_PATH = "/path/to/stewardos/agent-configs/wellness-advisor/.codex/peloton-oauth-token.json", PELOTON_REQUIRE_OAUTH = "1", PELOTON_PLATFORM = "web", PELOTON_TIMEOUT_SEC = "30" }
+# Optional for confidential clients: PELOTON_OAUTH_CLIENT_SECRET
+# Fallback auth only: PELOTON_BEARER_TOKEN, PELOTON_SESSION_ID, or PELOTON_USERNAME/PELOTON_PASSWORD

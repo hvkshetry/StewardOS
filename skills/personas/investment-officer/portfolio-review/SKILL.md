@@ -13,129 +13,195 @@ user-invocable: true
 
 # /portfolio-review — Unified Portfolio Review
 
-This skill is the canonical portfolio review workflow for the investment officer persona.
+This skill is the canonical investment-officer review workflow.
 
-It supports two closely related modes in one playbook:
+Default behavior:
 
-1. **Portfolio Health Check (default)**: positions, risk, drift, concentration, TLH, and actionable recommendations.
-2. **Client Review Prep**: package-ready talking points, benchmark framing, and meeting action items.
+1. run a readiness check,
+2. run the core diagnostic,
+3. flag hard-gate breaches and action-triggering thresholds,
+4. produce a corrective path when action is required,
+5. verify the primary path with internal MCP tools,
+6. explain every action-triggering metric in plain language.
 
-## MCP Tool Map
+This is not a diagnostic-only note anymore. When a trigger breaches, the review must recommend a path.
 
-- Portfolio baseline and performance: `ghostfolio.portfolio(operation="summary")`, `ghostfolio.portfolio(operation="performance", range="1y")`, `ghostfolio.portfolio(operation="dividends", range="1y")`
-- Portfolio state, risk, drift, and TLH: `portfolio-analytics.get_condensed_portfolio_state`, `portfolio-analytics.analyze_portfolio_risk`, `portfolio-analytics.analyze_allocation_drift`, `portfolio-analytics.find_tax_loss_harvesting_candidates`, `portfolio-analytics.validate_account_taxonomy`
-- Illiquid risk pre-flight: `risk-model-config` skill (assembles `illiquid_overrides` from `finance-graph`)
-- Tax overlay: `household-tax.compare_scenarios`
-- Market/policy context: `market-intel-direct.get_market_snapshot`, `market-intel-direct.search_market_news`, `policy-events.get_recent_bills`, `policy-events.get_federal_rules`
-- Disclosure overlays: `sec-edgar.sec_edgar_filing`, `sec-edgar.sec_edgar_insider`
+## Internal MCP Tool Map
+
+- Baseline and state: `ghostfolio.portfolio(operation="summary")`, `portfolio-analytics.validate_account_taxonomy`, `portfolio-analytics.get_condensed_portfolio_state`
+- Core risk: `portfolio-analytics.analyze_portfolio_risk`, `portfolio-analytics.analyze_hypothetical_portfolio_risk`
+- Drift and TLH: `portfolio-analytics.analyze_allocation_drift`, `portfolio-analytics.analyze_bucket_allocation_drift`, `portfolio-analytics.find_tax_loss_harvesting_candidates`
+- Practitioner layers: `portfolio-analytics.compute_ruin_scenario`, `portfolio-analytics.classify_barbell_buckets`, `market-intel-direct.get_shiller_cape`, `market-intel-direct.compute_market_temperature`, `market-intel-direct.rank_convex_candidates`
+- Illiquid overlay inputs: `risk-model-config` skill plus `finance-graph.get_net_worth`
+- Hard-gate overlay: `practitioner-heuristics` skill
+- Corrective-action workflow: `rebalance` skill
+- Tax overlay: `household-tax.assess_exact_support` only for narrow supported exact cases
+- Context: `market-intel-direct.get_market_snapshot`, `market-intel-direct.search_market_news`, `policy-events.*`, `sec-edgar.*`
+
+## Review Readiness
+
+Run these checks before writing the review. If a blocking layer fails, state that the review is incomplete and surface the gap near the top.
+
+Blocking:
+
+- `portfolio-analytics.validate_account_taxonomy(strict=false)`
+- `portfolio-analytics.get_condensed_portfolio_state`
+- `portfolio-analytics.analyze_portfolio_risk`
+- `portfolio-analytics.classify_barbell_buckets`
+- `portfolio-analytics.find_tax_loss_harvesting_candidates`
+- `finance-graph.get_net_worth`
+- `market-intel-direct.get_shiller_cape`
+- `market-intel-direct.compute_market_temperature`
+  - require `status == "complete"` for a complete temperature read
+
+If `compute_market_temperature.status == "incomplete"`, do not present the temperature score as if it were complete. Report the missing components explicitly.
+
+## Action-Triggering Metrics
+
+These metrics trigger corrective action, not just commentary.
+
+Hard triggers:
+
+- ES above `2.5%`
+- illiquidity above `25%` of household net worth
+- employer-linked liquid exposure above `15%`
+
+Threshold triggers:
+
+- hyper-safe below `15%`
+- convex below `10%`
+- fragile-middle above `70%`
+- material allocation drift outside IPS bands
+- actionable TLH set above the configured threshold
+
+Context-only metrics:
+
+- market temperature
+- ruin scenarios
+- Student-t fit
+- volatility regime
+
+These change urgency and sequencing, but they do not independently force trades.
 
 ## Execution Workflow
 
-### 1. Establish Scope and Baseline
+### 1. Establish scope and baseline
 
-- Run `ghostfolio.portfolio(operation="summary")` for baseline context.
-- Run `portfolio-analytics.validate_account_taxonomy` before scoped analysis.
-- Run `portfolio-analytics.get_condensed_portfolio_state` for holdings/top positions/unrealized P&L.
-- For scoped calls, pass `scope_account_types` as a JSON list (for example `["brokerage","401k","hsa","equity_comp"]`).
+- Run `ghostfolio.portfolio(operation="summary")`.
+- Run `portfolio-analytics.validate_account_taxonomy`.
+- Run `portfolio-analytics.get_condensed_portfolio_state`.
+- For scoped calls, pass `scope_account_types` as a native list value.
 
-### 2. Run Risk and Concentration Checks
+### 2. Run the quantitative risk engine
 
-- If the portfolio contains illiquid or private holdings, run the `risk-model-config` skill first to assemble `illiquid_overrides` from finance-graph metadata.
-- Run `portfolio-analytics.analyze_portfolio_risk(risk_model="auto", include_fx_risk=true, illiquid_overrides=<from risk-model-config if applicable>)` for ES(97.5%), VaR, volatility, max drawdown, Student-t fit, FX exposure, and vol regime.
-- If `risk_data_integrity.weight_coverage_pct < 0.90`: note that risk is computed on a partial portfolio and tail risk is likely understated.
-- If `risk.status == "unreliable"`: note coverage below 50% and treat all risk metrics as directional only.
-- If `risk.status == "critical"` or `illiquid_overlay.adjusted_es_975_1d > 0.025`: flag **RISK ALERT LEVEL 3** and discourage new risk additions.
-- Review `vol_regime.current_regime` — if elevated or crisis, highlight the short-vs-long vol ratio and `stress_es_975_1d`.
-- If `risk-model-config` produced stressed overrides (regime ≠ normal), report both base and stressed ES side-by-side.
-- Review `risk.student_t_fit` — if `fat_tailed: true`, note the degrees-of-freedom and parametric vs historical ES difference.
-- For decomposition detail (component VaR, risk attribution), use `include_decomposition=true`.
-- Flag concentration issues (for example, any single position >10% or correlated concentration clusters).
+- If illiquid or private holdings matter, run `risk-model-config` first and pass `illiquid_overrides` into `portfolio-analytics.analyze_portfolio_risk`.
+- Use `risk_model="auto"` and `include_fx_risk=true`.
+- If `risk.status == "critical"` or `illiquid_overlay.adjusted_es_975_1d > 0.025`, issue `RISK ALERT LEVEL 3`.
+- If `risk.status == "unreliable"`, state clearly that the tail metrics are directional only.
+- If `include_decomposition=true` is needed for a corrective path, use it before ranking sells.
 
-### 3. Evaluate Allocation Drift and Trade Context
+### 3. Run hard gates
 
-- Run `portfolio-analytics.analyze_allocation_drift` using IPS targets.
-- Highlight assets beyond threshold drift (default 3-5%).
-- Convert drift signals into clear buy/sell notional actions.
+Follow `practitioner-heuristics`:
 
-### 4. Run Tax Overlay and TLH Scan
+- ES gate
+- illiquidity gate
+- employer concentration gate
 
-- Run `portfolio-analytics.find_tax_loss_harvesting_candidates` (typically taxable accounts only).
-- For taxable brokerage-only scans, use `scope_account_types=["brokerage"]`.
-- Include wash sale constraints and estimated tax savings.
-- If material decisions are pending, run `household-tax.compare_scenarios`.
+If any hard gate fails, the review must say so before advisory context.
 
-### 5. Add Optional Context Layers
+### 4. Run practitioner layers
 
-- Macro context: `market-intel-direct.get_market_snapshot` and `market-intel-direct.search_market_news`.
-- Policy context: `policy-events.get_recent_bills`, `policy-events.get_federal_rules`.
-- Disclosure/insider overlays for concentrated names:
-  - `sec-edgar.sec_edgar_filing(operation="recent", identifier="[TICKER]", limit=3)`
-  - `sec-edgar.sec_edgar_insider(operation="summary", identifier="[TICKER]", days=180)`
+- `portfolio-analytics.compute_ruin_scenario`
+- `portfolio-analytics.classify_barbell_buckets`
+  - use `safe_gap_pct/value`, `convex_gap_pct/value`, and `fragile_excess_pct/value`
+- `market-intel-direct.get_shiller_cape`
+- `market-intel-direct.compute_market_temperature`
+- When convex is below target, run `market-intel-direct.rank_convex_candidates`
 
-### 6. Produce Outputs (Mode-appropriate)
+### 5. Produce corrective path when required
 
-#### A. Portfolio Health Check Output
+If any hard trigger or threshold trigger breaches, the review MUST call the `rebalance` skill logic and produce:
+
+- `Primary Path`
+- `Lower-Tax Alternative`
+- `Verification`
+- `Remaining Caveats`
+
+The primary path must be verified with `portfolio-analytics.analyze_hypothetical_portfolio_risk` before it is presented as the recommendation.
+
+### 6. Plain-language explanations
+
+For every metric that directly triggers corrective action, include a short block with:
+
+- `What this metric means`
+- `Why it matters`
+- `Threshold breached`
+- `Why the recommended action addresses it`
+
+Apply this to:
+
+- ES
+- illiquidity
+- employer concentration
+- hyper-safe gap
+- convex gap
+- fragile-middle excess
+- any drift metric that directly drives a trade recommendation
+
+### 7. Tax and implementation overlay
+
+- Run `portfolio-analytics.find_tax_loss_harvesting_candidates`
+- Use `scope_account_types=["brokerage"]` for brokerage-only TLH scans
+- If material taxable decisions are involved, check `household-tax.assess_exact_support` first and only use the exact tools when the case is supported
+
+### 8. Optional context
+
+- Macro: `market-intel-direct.get_market_snapshot`, `market-intel-direct.search_market_news`
+- Policy: `policy-events.get_recent_bills`, `policy-events.get_federal_rules`
+- Disclosure/insider context for concentrated names: `sec-edgar.sec_edgar_filing`, `sec-edgar.sec_edgar_insider`
+
+## Output Contract
+
+The review output should use this structure when action is required:
 
 ```markdown
 ## Portfolio Review — [Date]
 
+### Review Readiness
+- [complete / incomplete]
+- Blocking gaps: [...]
+
 ### Summary
-- Total Value: $X | Unrealized P&L: $Y
-- Scope: [entity/wrapper/account types]
+- Total liquid value: $X
+- Household net worth: $Y
+- Binding constraint: [ES / illiquidity / employer / none]
 
-### Risk Data Integrity
-- Weight Coverage: XX.X% | Missing: [symbols]
-- Model: [resolved model: historical or student_t] | Tail Observations: N
+### Triggered Metrics
+- [metric]: [status] | [threshold] | [brief explanation]
 
-### Risk
-- ES (97.5%): X.XX% [OK/CRITICAL/UNRELIABLE] (historical: X.XX% | parametric: X.XX%)
-- VaR (95%): X.XX% | VaR (97.5%): X.XX%
-- Annualized Vol: X.XX% | Max Drawdown: X.XX%
-- Student-t fit: df=X.X [fat-tailed: yes/no]
-- Vol Regime: [low/normal/elevated/crisis] (ratio: X.XX)
-- FX Exposure: X.X% non-USD [adjusted: yes/no]
+### Plain-Language Metric Explanations
+- [one short block per triggering metric]
 
-### Illiquid Overlay (if applicable)
-- Illiquid Weight: X.X% | Base Adjusted ES: X.XX%
-- Stressed ES (regime-adjusted): X.XX% [only if regime ≠ normal]
-- Positions: [list with vol/ρ assumptions, staleness flags]
+### Corrective Path
+- Primary path: [wrapper-aware actions]
+- Lower-tax alternative: [if different]
+- Advanced alternatives: [for example options-based convex ideas, if allowed]
 
-### Allocation Drift
-| Symbol | Current | Target | Drift | Action |
-|--------|---------|--------|-------|--------|
+### Verification
+- Proposed ES(97.5%): X.XX%
+- Verification pass: true/false
+- Post-plan barbell: X% safe / X% convex / X% fragile
 
-### TLH Opportunities
-| Symbol | Loss | Loss % | Est. Tax Savings | Replacement |
-|--------|------|--------|------------------|-------------|
-
-### Concentration Alerts
-- [Any flags]
-
-### Recommendations
-1. [Specific, actionable recommendations]
+### Remaining Caveats
+- [tool gaps, tax caveats, mapping caveats, incomplete context]
 ```
 
-#### B. Client Review Prep Output
+If no hard trigger or threshold trigger breaches, keep the review diagnostic and do not invent trades.
 
-Build a meeting packet with:
+## Constraints
 
-- performance table with benchmark comparison,
-- allocation current-vs-target summary,
-- top contributors/detractors,
-- concise market context,
-- clear action items with dates and owners.
-
-Suggested agenda:
-
-1. Market overview (2-3 minutes)
-2. Performance and attribution (5 minutes)
-3. Allocation drift/rebalancing discussion (5 minutes)
-4. Planning updates (5-10 minutes)
-5. Confirmed action items (5 minutes)
-
-## Constraints and Notes
-
-- This is advisory only; no direct trade authority.
-- Always report tool gaps explicitly. Never fabricate values.
-- Prioritize client-relevant framing over metric dumping.
-- Keep recommendations traceable to tool outputs and assumptions.
+- Advisory only. No trading authority.
+- Do not fabricate data or approximate missing blocking inputs.
+- ES `<= 2.5%` remains the binding constraint.
+- Do not present a corrective path as the recommendation unless it has been verified with `analyze_hypothetical_portfolio_risk`.

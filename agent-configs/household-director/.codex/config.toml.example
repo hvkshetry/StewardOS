@@ -1,4 +1,4 @@
-model = "gpt-5.3-codex"
+model = "gpt-5.4"
 model_reasoning_effort = "xhigh"
 approval_policy = "on-request"
 
@@ -35,7 +35,6 @@ command = "uv"
 args = ["run", "python", "server.py"]
 cwd = "/path/to/stewardos/servers/family-edu-mcp"
 startup_timeout_sec = 45
-env = { FAMILY_EDU_DB = "/path/to/stewardos/servers/family-edu-mcp/family_edu.db" }
 
 [mcp_servers.paperless]
 command = "node"

@@ -6,11 +6,11 @@ user-invocable: true
 
 # /morning-briefing — Market Open Briefing
 
-Quick morning snapshot to start the trading day. Uses the `market-briefing` skill workflow.
+Quick morning snapshot to start the trading day.
 
 ## Steps
 
-Follow the full `market-briefing` skill workflow:
+Gather the following sections (delegate to Research Analyst via Plane if a full `market-briefing` is needed):
 
 1. **Market Overview**: Major indices, yields, commodities, VIX, currencies
 2. **Macro Flow**: CFTC positioning + macro release calendar

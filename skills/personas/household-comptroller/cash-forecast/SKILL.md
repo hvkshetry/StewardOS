@@ -15,6 +15,10 @@ Project the household's cash position over 30, 60, and 90-day horizons using rec
 - Current balances: `actual-budget.analytics(operation="balance_history")`, `actual-budget.account`
 - Liability schedule context: `finance-graph.list_liabilities`, `finance-graph.generate_liability_amortization`, `finance-graph.get_liability_summary`
 
+## Scripts
+
+- `scripts/forecast_builder.py` — driver-based 13-week rolling cash flow projection with scenario modeling; feed it `actual-budget.analytics` historical data and `finance-graph` liability schedule
+
 ## Steps
 
 1. Pull current balances and separate liquid cash from credit/other non-liquid accounts.

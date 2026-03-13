@@ -126,30 +126,31 @@ Ensure these categories are properly tracked in Actual for tax time:
 
 1. Pull YTD income from Actual (self-employment, W-2, investment income)
 2. Pull capital gains/dividends from ghostfolio-mcp
-3. Use `estimate_quarterly_1040es` (household-tax-mcp) to compute next payment
-4. Use `project_safe_harbor` to verify payments meet safe harbor threshold
-5. Use `generate_quarterly_vouchers` for full-year payment schedule
+3. Normalize facts to the reduced exact `household-tax` contract
+4. Use `assess_exact_support` before any tax recommendation
+5. If supported, use `compute_individual_return_exact`, `compare_individual_payment_strategies`, and `plan_individual_safe_harbor`
+6. If unsupported, stop and report the gap rather than approximating
 
 **Due dates:** Q1 Apr 15, Q2 Jun 15, Q3 Sep 15, Q4 Jan 15 (next year)
 
 ### Self-Employment Tax (Schedule SE)
 
-For self-employment income, use `compute_schedule_se` to calculate:
+Self-employment income is outside the reduced exact household-tax scope. For these cases:
 - Social Security tax (12.4% up to wage base)
 - Medicare tax (2.9% + 0.9% additional above $200k)
 - Deductible half of SE tax (reduces AGI)
+- do not use `household-tax` as an exact calculator; surface the unsupported scope explicitly
 
 ### Schedule C Deduction Categorization
 
 Use `categorize_schedule_c_deductions` to map Actual Budget expense categories to Schedule C lines. Review unmapped categories quarterly to ensure all deductions are captured.
 
-### Tax Scenario Comparison
+### Exact Tax Support
 
-Use `compare_tax_scenarios` for decisions like:
-- Additional Roth conversion impact
-- Estimated income changes (new client, project end)
-- S-corp election evaluation
-- Retirement contribution optimization
+`household-tax` no longer exposes generic scenario comparison tools. Use the
+exact quarterly-tax/safe-harbor surface only when the case is inside the
+supported 2026 `US` + `MA` scope; otherwise flag that exact household-tax
+support is unavailable for the requested budgeting decision.
 
 ### Integration with Ghostfolio
 

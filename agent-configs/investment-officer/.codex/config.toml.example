@@ -1,4 +1,4 @@
-model = "gpt-5.3-codex"
+model = "gpt-5.4"
 model_reasoning_effort = "xhigh"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
@@ -34,8 +34,9 @@ startup_timeout_sec = 120
 env = { EDGAR_LOCAL_DATA_DIR = "/tmp/sec-edgar-data", EDGAR_CACHE_DIR = "/tmp/sec-edgar-cache" }
 
 [mcp_servers.portfolio-analytics]
-command = "/path/to/stewardos/servers/investing-workspace/.venv/bin/python"
+command = "/path/to/stewardos/servers/investing-workspace/portfolio-analytics/.venv/bin/python"
 args = ["/path/to/stewardos/servers/investing-workspace/portfolio-analytics/server.py"]
+cwd = "/path/to/stewardos/servers/investing-workspace/portfolio-analytics"
 startup_timeout_sec = 90
 env = { GHOSTFOLIO_URL = "http://localhost:8224", GHOSTFOLIO_TOKEN = "${GHOSTFOLIO_TOKEN}" }
 

@@ -40,29 +40,11 @@
     {{action_rows}}
   </table>
 
-  <h3 style="margin:0 0 8px 0;font-size:14px;color:{{accent}};border-bottom:2px solid {{accent}};padding-bottom:4px;">Signal Graph</h3>
+  <h3 style="margin:0 0 8px 0;font-size:14px;color:{{accent}};border-bottom:2px solid {{accent}};padding-bottom:4px;">Primary Visual</h3>
   <div style="border:1px solid #d9e2ec;border-radius:8px;padding:10px;background:#fbfdff;margin-bottom:14px;">
-    <div style="font-size:12px;color:#52606d;margin-bottom:6px;">{{graph_caption}}</div>
-
-    <div style="margin-bottom:6px;">
-      <div style="display:flex;justify-content:space-between;font-size:11px;color:#6b7785;"><span>{{bar_1_label}}</span><span>{{bar_1_value}}</span></div>
-      <div style="height:8px;background:#e8eef5;border-radius:999px;overflow:hidden;">
-        <div style="height:8px;width:{{bar_1_pct}};background:{{accent}};"></div>
-      </div>
-    </div>
-
-    <div style="margin-bottom:6px;">
-      <div style="display:flex;justify-content:space-between;font-size:11px;color:#6b7785;"><span>{{bar_2_label}}</span><span>{{bar_2_value}}</span></div>
-      <div style="height:8px;background:#e8eef5;border-radius:999px;overflow:hidden;">
-        <div style="height:8px;width:{{bar_2_pct}};background:#3d7ea6;"></div>
-      </div>
-    </div>
-
+    <div style="font-size:12px;color:#52606d;margin-bottom:8px;">{{primary_visual_caption}}</div>
     <div>
-      <div style="display:flex;justify-content:space-between;font-size:11px;color:#6b7785;"><span>{{bar_3_label}}</span><span>{{bar_3_value}}</span></div>
-      <div style="height:8px;background:#e8eef5;border-radius:999px;overflow:hidden;">
-        <div style="height:8px;width:{{bar_3_pct}};background:#6da9c9;"></div>
-      </div>
+      {{primary_visual_html}}
     </div>
   </div>
 
@@ -91,7 +73,9 @@
 ```
 
 Usage notes:
-- Executive Summary should remain fast to scan (KPI + Action Board + Signal Graph).
+- Executive Summary should remain fast to scan (KPI + Action Board + optional Primary Visual).
+- Use one primary visual only when it materially improves the brief; otherwise omit the section rather than forcing a low-value chart.
+- Choose the visual form that best explains the key point: spark trend, bar chart, line chart, scatter plot, progress bars, or another compact honest graphic.
 - Deep Dive should explain reasoning, assumptions, and tradeoffs in plain language.
 - Provenance table should name MCP tools and include web links when used.
 - If no web sources were consulted, explicitly say so in Deep Dive or Provenance.

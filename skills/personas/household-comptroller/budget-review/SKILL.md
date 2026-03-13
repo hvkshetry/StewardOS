@@ -16,6 +16,10 @@ Analyze the current month's budget performance with trend context, anomaly detec
 - Transaction detail: `actual-budget.transaction`
 - Account balances: `actual-budget.analytics(operation="balance_history")`
 
+## Scripts
+
+- `scripts/budget_variance_analyzer.py` — materiality-filtered variance analysis with favorability classification; feed it `actual-budget.analytics` spending data and budget targets
+
 ## Steps
 
 ### 1. Pull Current Month Data

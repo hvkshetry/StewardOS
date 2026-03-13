@@ -13,7 +13,7 @@ Create a portfolio recommendation document suitable for advisory discussion.
 - Current state: `ghostfolio.portfolio`, `portfolio-analytics.get_condensed_portfolio_state`
 - Risk limits: `portfolio-analytics.analyze_portfolio_risk`
 - Drift and reallocation: `portfolio-analytics.analyze_allocation_drift`
-- Tax overlay: `portfolio-analytics.find_tax_loss_harvesting_candidates`, `household-tax.compare_scenarios`
+- Tax overlay: `portfolio-analytics.find_tax_loss_harvesting_candidates`; use `household-tax.assess_exact_support` only for narrow exact household-tax cases
 - Macro context: `market-intel-direct.get_market_snapshot`, `market-intel-direct.get_macro_context_panel`
 
 ## Workflow

@@ -1,4 +1,4 @@
-model = "gpt-5.3-codex"
+model = "gpt-5.4"
 model_reasoning_effort = "xhigh"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
@@ -35,3 +35,8 @@ env = { PAPERLESS_URL = "http://localhost:8223", API_KEY = "${PAPERLESS_TOKEN}" 
 command = "uv"
 args = ["run", "python", "server.py"]
 cwd = "/path/to/stewardos/servers/household-tax-mcp"
+
+[mcp_servers.finance-graph]
+command = "uv"
+args = ["run", "python", "server.py"]
+cwd = "/path/to/stewardos/servers/finance-graph-mcp"

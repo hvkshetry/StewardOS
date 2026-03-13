@@ -15,6 +15,10 @@ Produce a concise, client-facing periodic report.
 - Market context: `market-intel-direct.get_market_snapshot`, `market-intel-direct.search_market_news`
 - Disclosure context for top names: `sec-edgar.sec_edgar_filing`, `sec-edgar.sec_edgar_insider`
 
+## Scripts
+
+- `scripts/ratio_calculator.py` — financial ratio analysis across 5 categories; feed it P&L/BS/CF data from `finance-graph` and `sec-edgar` for ratio section of report
+
 ## Workflow
 
 ### Step 1: Reporting Scope

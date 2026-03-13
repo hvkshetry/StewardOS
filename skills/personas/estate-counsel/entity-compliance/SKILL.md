@@ -44,6 +44,7 @@ description: |
 - Primary system: `estate-planning` for entities, critical dates, ownership paths, and linked legal docs.
 - Tax planning overlays: `household-tax` for estimated payments, scenario analysis, and filing-readiness views.
 - Finance facts: `finance-graph` only when underlying valuation/statement context is required to explain a compliance risk.
+- Regulatory context: `us-legal.search_court_opinions` and `us-legal.get_recent_court_opinions` for case law relevant to compliance obligations; `us-legal.search_federal_register` for pending regulatory changes affecting entity filing requirements.
 - Do not treat `finance-graph` analytics as a substitute for household-tax scenario outputs.
 
 ### Step 1: List Active Entities

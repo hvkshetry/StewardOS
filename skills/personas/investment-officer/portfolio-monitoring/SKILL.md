@@ -15,7 +15,7 @@ Track performance of non-public holdings and connect results to household portfo
 - Household portfolio context: `ghostfolio.account`, `ghostfolio.portfolio`, `portfolio-analytics.get_condensed_portfolio_state`
 - Market and macro context: `market-intel-direct.get_market_snapshot`, `market-intel-direct.get_macro_context_panel`
 - Public comp disclosure benchmarks: `sec-edgar.sec_edgar_company`, `sec-edgar.sec_edgar_financial`, `sec-edgar.sec_edgar_filing`
-- Tax impact context: `household-tax.compare_scenarios`
+- Tax impact context: only use `household-tax.assess_exact_support` for supported exact household-tax cases
 
 ## Workflow
 

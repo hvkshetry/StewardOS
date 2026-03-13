@@ -29,7 +29,14 @@ Pull last night's sleep data:
 
 - Yesterday's steps and active energy
 - Yesterday's exercise minutes
-- Was yesterday a workout day? (wger)
+- Was yesterday a workout day?
+  - Pull `wger` first for logged sessions if available
+  - If `wger` is empty or incomplete, use `fitbod_parse_csv` for prior-day weight-training detail and `peloton_get_workouts` for prior-day cardio activity
+  - Exclude Fitbod cardio rows when a matching Peloton workout exists with the same local start time and duration; treat them as synced duplicates
+  - Use `peloton_get_workout_detail` when the most recent cardio class needs instructor, class type, difficulty, or interval detail
+  - Use `fitbod_preview_mapping` only when you need lifting muscle-group confidence or category rollups
+  - Use Apple Health workout summaries only as fallback coverage when direct workout sources are missing
+  - Only report Fitbod muscle-group detail when trailing-365d weighted mapping coverage is at least 90%; otherwise report exercise-level detail and label muscle-group coverage as partial
 
 ### 4. Recovery Recommendation
 

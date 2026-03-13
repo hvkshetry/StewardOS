@@ -16,7 +16,7 @@ Produce a decision-grade valuation range for private or illiquid assets.
 - Holdings context: `ghostfolio.account`, `ghostfolio.portfolio`
 - Comp and disclosure context: `sec-edgar.sec_edgar_company`, `sec-edgar.sec_edgar_financial`, `sec-edgar.sec_edgar_filing`
 - Macro/rates context: `market-intel-direct.get_market_snapshot`, `market-intel-direct.get_fred_series`
-- Tax impact context: `household-tax.compare_scenarios`
+- Tax impact context: only use `household-tax.assess_exact_support` if the question reduces to a supported exact household-tax case
 - Policy context where material: `policy-events.get_federal_rules`
 
 ## Workflow
@@ -30,10 +30,12 @@ Produce a decision-grade valuation range for private or illiquid assets.
 
 ### Step 2: Multi-Method Valuation
 
-- Run `comps-analysis` method for market-based valuation band.
-- Run `dcf-model` method for intrinsic valuation band.
-- Run `returns-analysis` for investor-outcome consistency check.
-- Run `unit-economics` where recurring/contracted revenue is material.
+Delegate research-intensive valuation methods to the Research Analyst (+ra) via Plane:
+
+- Request `comps-analysis` for market-based valuation band.
+- Request `dcf-model` for intrinsic valuation band.
+- Request `returns-analysis` for investor-outcome consistency check.
+- Request `unit-economics` where recurring/contracted revenue is material.
 
 ### Step 3: Synthesize Range
 

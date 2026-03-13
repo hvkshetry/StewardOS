@@ -1,11 +1,9 @@
 ---
 name: search
-description: Search across all connected sources in one query
+description: Search across all connected household sources in one query. Use when the user asks to search, find, or locate information across multiple sources (email, documents, budget, inventory, estate records, recipes, pantry). Decomposes queries, runs parallel searches, ranks and deduplicates results.
 ---
 
 # Search Command
-
-> If you see unfamiliar placeholders or need to check which tools are connected, see [CONNECTORS.md](../CONNECTORS.md).
 
 Search across all connected MCP sources in a single query. Decompose the user's question, run parallel searches, and synthesize results.
 
@@ -13,70 +11,77 @@ Search across all connected MCP sources in a single query. Decompose the user's 
 
 ### 1. Check Available Sources
 
-Before searching, determine which MCP sources are available. Attempt to identify connected tools from the available tool list. Common sources:
+Before searching, determine which MCP sources are available from the tool list. Household sources:
 
-- **Microsoft Teams (via `office-mcp`)** — chat platform tools
-- **Microsoft 365 Email (via `office-mcp`)** — email tools
-- **OneDrive/SharePoint (via `office-mcp`)** — cloud storage tools
-- **OpenProject (via `openproject-mcp`)** — project tracking tools
-- **Twenty CRM (via `twenty-mcp`)** — CRM tools
-- **Semantic Search KB (via `knowledge-base`)** — knowledge base tools
+- **Email & Calendar** (via `google-workspace`) — `search_gmail_messages`, `search_drive_files`
+- **Documents** (via `paperless`) — `search_documents` (OCR'd scans, receipts, legal docs)
+- **Quick Notes** (via `memos`) — `search_memos`
+- **Budget & Transactions** (via `actual-budget`) — `analytics(operation="monthly_summary"|"spending_by_category"|"balance_history")`
+- **Inventory** (via `homebox`) — `list_items` (household items, warranties, manuals)
+- **Estate & Entities** (via `estate-planning`) — `list_assets`, `list_entities`, `get_upcoming_dates`
+- **Recipes** (via `mealie`) — `get_recipes`, `get_recipe_detailed`
+- **Pantry** (via `grocy`) — `get_stock_overview`, `get_expiring_products`
 
 If no MCP sources are connected:
 ```
 To search across your tools, you'll need to connect at least one source.
-Check your MCP settings to add Microsoft Teams (via `office-mcp`), Microsoft 365 Email (via `office-mcp`), OneDrive/SharePoint (via `office-mcp`), or other tools.
-
-Supported sources: Microsoft Teams (via `office-mcp`), Microsoft 365 Email (via `office-mcp`), OneDrive/SharePoint (via `office-mcp`), OpenProject (via `openproject-mcp`), Twenty CRM (via `twenty-mcp`), Semantic Search KB (via `knowledge-base`),
-and any other MCP-connected service.
+Check your MCP settings to add google-workspace, paperless, actual-budget, or other tools.
 ```
 
 ### 2. Parse the User's Query
 
 Analyze the search query to understand:
 
-- **Intent**: What is the user looking for? (a decision, a document, a person, a status update, a conversation)
-- **Entities**: People, projects, teams, tools mentioned
+- **Intent**: What is the user looking for? (a document, a transaction, a recipe, an entity, a scheduled date)
+- **Entities**: People, properties, accounts, assets mentioned
 - **Time constraints**: Recency signals ("this week", "last month", specific dates)
-- **Source hints**: References to specific tools ("in Microsoft Teams (via `office-mcp`)", "that email", "the doc")
+- **Source hints**: References to specific systems ("in paperless", "that email", "the budget")
 - **Filters**: Extract explicit filters from the query:
   - `from:` — Filter by sender/author
-  - `in:` — Filter by channel, folder, or location
+  - `in:` — Filter by folder, label, or category
   - `after:` — Only results after this date
   - `before:` — Only results before this date
-  - `type:` — Filter by content type (message, email, doc, thread, file)
+  - `type:` — Filter by content type (email, document, receipt, recipe, transaction)
 
 ### 3. Decompose into Sub-Queries
 
-For each available source, create a targeted sub-query using that source's native search syntax:
+For each available source, create a targeted sub-query:
 
-**Microsoft Teams (via `office-mcp`):**
-- Use available search and read tools for your chat platform
-- Translate filters: `from:` maps to sender, `in:` maps to channel/room, dates map to time range filters
-- Use natural language queries for semantic search when appropriate
-- Use keyword queries for exact matches
+**Google Workspace (email):**
+- Use `google-workspace.search_gmail_messages` for email threads
+- Translate filters: `from:` maps to sender, dates map to time range
+- Use `google-workspace.search_drive_files` for documents in Drive
 
-**Microsoft 365 Email (via `office-mcp`):**
-- Use available email search tools
-- Translate filters: `from:` maps to sender, dates map to time range filters
-- Map `type:` to attachment filters or subject-line searches as appropriate
+**Paperless (documents):**
+- Use `paperless.search_documents` for OCR'd documents
+- Good for: receipts, contracts, tax forms, legal documents, scanned mail
+- Filter by correspondent, document type, tags
 
-**OneDrive/SharePoint (via `office-mcp`):**
-- Use available file search tools
-- Translate to file query syntax: name contains, full text contains, modified date, file type
-- Consider both file names and content
+**Memos (notes):**
+- Use `memos.search_memos` for quick notes and reminders
+- Good for: meeting notes, decisions, ideas, reminders
 
-**OpenProject (via `openproject-mcp`):**
-- Use available task search or typeahead tools
-- Map to task text search, assignee filters, date filters, project filters
+**Actual Budget (finances):**
+- Use `actual-budget.analytics` for financial queries
+- Operations: `monthly_summary`, `spending_by_category`, `balance_history`
+- Good for: "how much did we spend on X", "what's the balance of Y"
 
-**Twenty CRM (via `twenty-mcp`):**
-- Use available CRM query tools
-- Search across Account, Contact, Opportunity, and other relevant objects
+**Homebox (inventory):**
+- Use `homebox.list_items` for household inventory
+- Good for: warranties, manuals, serial numbers, purchase dates
 
-**Semantic Search KB (via `knowledge-base`):**
-- Use semantic search for conceptual questions
-- Use keyword search for exact matches
+**Estate Planning (entities/assets):**
+- Use `estate-planning.list_assets`, `estate-planning.list_entities` for entity/asset queries
+- Use `estate-planning.get_upcoming_dates` for compliance deadlines
+- Good for: trust details, entity structures, filing dates
+
+**Mealie (recipes):**
+- Use `mealie.get_recipes`, `mealie.get_recipe_detailed` for recipe search
+- Good for: "what can I make with X", meal planning queries
+
+**Grocy (pantry):**
+- Use `grocy.get_stock_overview`, `grocy.get_expiring_products` for pantry queries
+- Good for: "do we have X", "what's expiring soon"
 
 ### 4. Execute Searches in Parallel
 
@@ -90,28 +95,28 @@ For each source:
 ### 5. Rank and Deduplicate Results
 
 **Deduplication:**
-- Identify the same information appearing across sources (e.g., a decision discussed in Microsoft Teams (via `office-mcp`) AND confirmed via email)
+- Identify the same information appearing across sources (e.g., a receipt in paperless AND a matching transaction in actual-budget)
 - Group related results together rather than showing duplicates
 - Prefer the most authoritative or complete version
 
 **Ranking factors:**
 - **Relevance**: How well does the result match the query intent?
-- **Freshness**: More recent results rank higher for status/decision queries
-- **Authority**: Official docs > wiki > chat messages for factual questions; conversations > docs for "what did we discuss" queries
+- **Freshness**: More recent results rank higher for status/date queries
+- **Authority**: Legal docs in paperless > quick notes in memos for factual questions; memos > docs for "what did we decide" queries
 - **Completeness**: Results with more context rank higher
 
 ### 6. Present Unified Results
 
 Format the response as a synthesized answer, not a raw list of results:
 
-**For factual/decision queries:**
+**For factual/document queries:**
 ```
 [Direct answer to the question]
 
 Sources:
-- [Source 1: brief description] (Microsoft Teams (via `office-mcp`), #channel, date)
-- [Source 2: brief description] (Microsoft 365 Email (via `office-mcp`), from person, date)
-- [Source 3: brief description] (OneDrive/SharePoint (via `office-mcp`), doc name, last modified)
+- [Source 1: brief description] (paperless, document type, date)
+- [Source 2: brief description] (google-workspace, email from person, date)
+- [Source 3: brief description] (estate-planning, entity/asset record)
 ```
 
 **For exploratory queries ("what do we know about X"):**
@@ -119,13 +124,13 @@ Sources:
 [Synthesized summary combining information from all sources]
 
 Found across:
-- Microsoft Teams (via `office-mcp`): X relevant messages in Y channels
-- Microsoft 365 Email (via `office-mcp`): X relevant threads
-- OneDrive/SharePoint (via `office-mcp`): X related documents
+- Paperless: X relevant documents
+- Google Workspace: X relevant emails
+- Estate Planning: X related entities/assets
 - [Other sources as applicable]
 
 Key sources:
-- [Most important source with link/reference]
+- [Most important source with reference]
 - [Second most important source]
 ```
 
@@ -142,9 +147,9 @@ Also found:
 **Ambiguous queries:**
 If the query could mean multiple things, ask one clarifying question before searching:
 ```
-"API redesign" could refer to a few things. Are you looking for:
-1. The REST API v2 redesign (Project Aurora)
-2. The internal SDK API changes
+"the renovation" could refer to a few things. Are you looking for:
+1. The Maple Street property renovation (active project)
+2. The bathroom renovation completed last year
 3. Something else?
 ```
 
@@ -153,7 +158,7 @@ If the query could mean multiple things, ask one clarifying question before sear
 I couldn't find anything matching "[query]" across [list of sources searched].
 
 Try:
-- Broader terms (e.g., "database" instead of "PostgreSQL migration")
+- Broader terms (e.g., "property" instead of "123 Maple St")
 - Different time range (currently searching [time range])
 - Checking if the relevant source is connected (currently searching: [sources])
 ```

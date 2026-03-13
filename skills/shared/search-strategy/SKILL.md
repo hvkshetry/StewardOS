@@ -1,26 +1,25 @@
 ---
 name: search-strategy
-description: Query decomposition and multi-source search orchestration. Breaks natural language questions into targeted searches per source, translates queries into source-specific syntax, ranks results by relevance, and handles ambiguity and fallback strategies.
+description: Query decomposition and multi-source search orchestration. Breaks natural language questions into targeted searches per household source, translates queries into source-specific syntax, ranks results by relevance, and handles ambiguity and fallback strategies.
 ---
 
 # Search Strategy
 
-> If you see unfamiliar placeholders or need to check which tools are connected, see [CONNECTORS.md](../../CONNECTORS.md).
-
-The core intelligence behind enterprise search. Transforms a single natural language question into parallel, source-specific searches and produces ranked, deduplicated results.
+The core intelligence behind household search. Transforms a single natural language question into parallel, source-specific searches and produces ranked, deduplicated results.
 
 ## The Goal
 
 Turn this:
 ```
-"What did we decide about the API migration timeline?"
+"When does the property tax payment come due for Maple Street?"
 ```
 
 Into targeted searches across every connected source:
 ```
-Microsoft Teams (via `office-mcp`):  "API migration timeline decision" (semantic) + "API migration" in:#engineering after:2025-01-01
-Semantic Search KB (via `knowledge-base`): semantic search "API migration timeline decision"
-OpenProject (via `openproject-mcp`):  text search "API migration" in relevant workspace
+google-workspace:  "property tax Maple Street due" (email search)
+paperless:         "property tax" (document search, tagged with property)
+estate-planning:   get_upcoming_dates (compliance/deadline lookup)
+actual-budget:     analytics(operation="spending_by_category") for property tax category
 ```
 
 Then synthesize the results into a single coherent answer.
@@ -33,99 +32,124 @@ Classify the user's question to determine search strategy:
 
 | Query Type | Example | Strategy |
 |-----------|---------|----------|
-| **Decision** | "What did we decide about X?" | Prioritize conversations (Microsoft Teams (via `office-mcp`), email), look for conclusion signals |
-| **Status** | "What's the status of Project Y?" | Prioritize recent activity, task trackers, status updates |
-| **Document** | "Where's the spec for Z?" | Prioritize Drive, wiki, shared docs |
-| **Person** | "Who's working on X?" | Search task assignments, message authors, doc collaborators |
-| **Factual** | "What's our policy on X?" | Prioritize wiki, official docs, then confirmatory conversations |
-| **Temporal** | "When did X happen?" | Search with broad date range, look for timestamps |
-| **Exploratory** | "What do we know about X?" | Broad search across all sources, synthesize |
+| **Document** | "Where's the trust agreement?" | Prioritize paperless, Drive, estate-planning |
+| **Financial** | "How much did we spend on groceries?" | Prioritize actual-budget, then receipts in paperless |
+| **Deadline** | "When is the next filing due?" | Prioritize estate-planning dates, calendar, memos |
+| **Person** | "What did Jim send us?" | Search email, paperless by correspondent |
+| **Asset/Entity** | "What entities own the rental?" | Prioritize estate-planning, then supporting docs |
+| **Household** | "Do we have olive oil?" | Prioritize grocy, then mealie recipes |
+| **Exploratory** | "What do we know about the Greenwood application?" | Broad search across all sources |
 
 ### Step 2: Extract Search Components
 
 From the query, extract:
 
 - **Keywords**: Core terms that must appear in results
-- **Entities**: People, projects, teams, tools (use memory system if available)
-- **Intent signals**: Decision words, status words, temporal markers
-- **Constraints**: Time ranges, source hints, author filters
+- **Entities**: People, properties, accounts, trusts, assets (use memory system if available)
+- **Intent signals**: Deadline words, financial words, document words
+- **Constraints**: Time ranges, source hints, category filters
 - **Negations**: Things to exclude
 
 ### Step 3: Generate Sub-Queries Per Source
 
 For each available source, create one or more targeted queries:
 
-**Prefer semantic search** for:
-- Conceptual questions ("What do we think about...")
+**Prefer semantic/keyword search** for:
+- Conceptual questions ("What do we know about...")
 - Questions where exact keywords are unknown
 - Exploratory queries
 
-**Prefer keyword search** for:
-- Known terms, project names, acronyms
-- Exact phrases the user quoted
-- Filter-heavy queries (from:, in:, after:)
+**Prefer structured queries** for:
+- Financial data (specific categories, date ranges, accounts)
+- Entity/asset lookups (known names, types)
+- Inventory checks (specific items)
 
 **Generate multiple query variants** when the topic might be referred to differently:
 ```
-User: "Kubernetes setup"
-Queries: "Kubernetes", "k8s", "cluster", "container orchestration"
+User: "Maple Street property"
+Queries: "Maple Street", "123 Maple", "maple reno", "rental property"
 ```
 
 ## Source-Specific Query Translation
 
-### Microsoft Teams (via `office-mcp`)
+### Google Workspace (email & docs)
 
-**Semantic search** (natural language questions):
+**Email search** (`google-workspace.search_gmail_messages`):
 ```
-query: "What is the status of project aurora?"
-```
-
-**Keyword search:**
-```
-query: "project aurora status update"
-query: "aurora in:#engineering after:2025-01-15"
-query: "from:<@UserID> aurora"
+query: "property tax Maple Street"
+query: "from:jim trust amendment"
 ```
 
-**Filter mapping:**
-| Enterprise filter | Microsoft Teams (via `office-mcp`) syntax |
-|------------------|--------------|
-| `from:sarah` | `from:sarah` or `from:<@USERID>` |
-| `in:engineering` | `in:engineering` |
-| `after:2025-01-01` | `after:2025-01-01` |
-| `before:2025-02-01` | `before:2025-02-01` |
-| `type:thread` | `is:thread` |
-| `type:file` | `has:file` |
-
-### Semantic Search KB (via `knowledge-base`) (Wiki)
-
-**Semantic search** — Use for conceptual queries:
+**Drive search** (`google-workspace.search_drive_files`):
 ```
-descriptive_query: "API migration timeline and decision rationale"
-```
-
-**Keyword search** — Use for exact terms:
-```
-query: "API migration"
-query: "\"API migration timeline\""  (exact phrase)
-```
-
-### OpenProject (via `openproject-mcp`)
-
-**Task search:**
-```
-text: "API migration"
-workspace: [workspace_id]
-completed: false  (for status queries)
-assignee_any: "me"  (for "my tasks" queries)
+query: "estate plan 2025"
 ```
 
 **Filter mapping:**
-| Enterprise filter | OpenProject (via `openproject-mcp`) parameter |
-|------------------|----------------|
-| `from:sarah` | `assignee_any` or `created_by_any` |
-| `after:2025-01-01` | `modified_on_after: "2025-01-01"` |
-| `type:milestone` | `resource_subtype: "milestone"` |
+| User filter | Google Workspace parameter |
+|-------------|---------------------------|
+| `from:jim` | sender filter |
+| `after:2025-01-01` | date range |
+| `type:pdf` | file type filter |
+
+### Paperless (documents)
+
+**Document search** (`paperless.search_documents`):
+```
+query: "property tax bill"
+correspondent: "County Assessor"
+document_type: "Tax Document"
+```
+
+Good for: receipts, contracts, tax forms, insurance policies, legal documents, scanned mail.
+
+### Actual Budget (finances)
+
+**Financial queries** (`actual-budget.analytics`):
+```
+operation: "spending_by_category"
+operation: "monthly_summary"
+operation: "balance_history"
+```
+
+**Filter mapping:**
+| User filter | Actual Budget parameter |
+|-------------|------------------------|
+| Category | category filter on analytics |
+| Date range | start_date / end_date |
+| Account | account filter |
+
+### Estate Planning (entities/assets/dates)
+
+**Entity/asset lookup:**
+```
+estate-planning.list_assets → all assets with metadata
+estate-planning.list_entities → trusts, LLCs, etc.
+estate-planning.get_upcoming_dates → compliance deadlines
+```
+
+### Memos (notes)
+
+**Note search** (`memos.search_memos`):
+```
+query: "decision about school enrollment"
+```
+
+Good for: meeting notes, decisions, reminders, quick references.
+
+### Homebox (inventory)
+
+**Item search** (`homebox.list_items`):
+```
+query: "warranty dishwasher"
+```
+
+Good for: warranties, manuals, serial numbers, purchase history.
+
+### Mealie & Grocy (kitchen)
+
+**Recipe search**: `mealie.get_recipes`, `mealie.get_recipe_detailed`
+**Pantry search**: `grocy.get_stock_overview`, `grocy.get_expiring_products`
 
 ## Result Ranking
 
@@ -133,30 +157,30 @@ assignee_any: "me"  (for "my tasks" queries)
 
 Score each result on these factors (weighted by query type):
 
-| Factor | Weight (Decision) | Weight (Status) | Weight (Document) | Weight (Factual) |
-|--------|-------------------|------------------|--------------------|-------------------|
-| Keyword match | 0.3 | 0.2 | 0.4 | 0.3 |
-| Freshness | 0.3 | 0.4 | 0.2 | 0.1 |
-| Authority | 0.2 | 0.1 | 0.3 | 0.4 |
-| Completeness | 0.2 | 0.3 | 0.1 | 0.2 |
+| Factor | Weight (Document) | Weight (Financial) | Weight (Deadline) | Weight (Exploratory) |
+|--------|-------------------|--------------------|--------------------|----------------------|
+| Keyword match | 0.4 | 0.2 | 0.2 | 0.3 |
+| Freshness | 0.2 | 0.3 | 0.4 | 0.2 |
+| Authority | 0.3 | 0.3 | 0.3 | 0.2 |
+| Completeness | 0.1 | 0.2 | 0.1 | 0.3 |
 
 ### Authority Hierarchy
 
 Depends on query type:
 
-**For factual/policy questions:**
+**For document/legal questions:**
 ```
-Wiki/Official docs > Shared documents > Email announcements > Chat messages
-```
-
-**For "what happened" / decision questions:**
-```
-Meeting notes > Thread conclusions > Email confirmations > Chat messages
+Paperless (OCR'd originals) > Drive docs > Email attachments > Memos
 ```
 
-**For status questions:**
+**For financial questions:**
 ```
-Task tracker > Recent chat > Status docs > Email updates
+Actual Budget (structured data) > Paperless receipts > Email confirmations > Memos
+```
+
+**For deadline/compliance questions:**
+```
+Estate Planning dates > Calendar events > Email reminders > Memos
 ```
 
 ## Handling Ambiguity
@@ -164,11 +188,11 @@ Task tracker > Recent chat > Status docs > Email updates
 When a query is ambiguous, prefer asking one focused clarifying question over guessing:
 
 ```
-Ambiguous: "search for the migration"
-→ "I found references to a few migrations. Are you looking for:
-   1. The database migration (Project Phoenix)
-   2. The cloud migration (AWS → GCP)
-   3. The email migration (Exchange → O365)"
+Ambiguous: "search for the application"
+→ "I found references to a few applications. Are you looking for:
+   1. The Greenwood Academy enrollment application
+   2. The building permit application for Maple Street
+   3. Something else?"
 ```
 
 Only ask for clarification when:
@@ -192,10 +216,10 @@ When a source is unavailable or returns no results:
 
 If initial queries return too few results:
 ```
-Original: "PostgreSQL migration Q2 timeline decision"
-Broader:  "PostgreSQL migration"
-Broader:  "database migration"
-Broadest: "migration"
+Original: "Maple Street property tax Q1 payment receipt"
+Broader:  "property tax Maple"
+Broader:  "property tax"
+Broadest: "tax payment"
 ```
 
 Remove constraints in this order:
@@ -211,7 +235,7 @@ Always execute searches across sources in parallel, never sequentially. The tota
 ```
 [User query]
      ↓ decompose
-[Microsoft Teams (via `office-mcp`) query] [Microsoft 365 Email (via `office-mcp`) query] [OneDrive/SharePoint (via `office-mcp`) query] [Wiki query] [OpenProject (via `openproject-mcp`) query]
+[email query] [paperless query] [budget query] [estate query] [memos query]
      ↓            ↓            ↓              ↓            ↓
   (parallel execution)
      ↓
