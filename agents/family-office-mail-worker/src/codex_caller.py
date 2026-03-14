@@ -134,6 +134,16 @@ async def call_codex(
                 process.communicate(),
                 timeout=settings.codex_timeout_seconds,
             )
+        except asyncio.CancelledError:
+            # Graceful shutdown: terminate subprocess on task cancellation
+            logger.info("Codex call cancelled — terminating subprocess")
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=10)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                process.kill()
+                await process.wait()
+            raise
         except asyncio.TimeoutError:
             process.kill()
             await process.wait()

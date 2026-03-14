@@ -8,6 +8,16 @@ import src.main as main
 from src.models import AgentResponse, IncomingEmail
 
 
+async def _passthrough_ordering(key, coro):
+    """Test bypass for _execute_with_ordering — just await the coroutine."""
+    return await coro
+
+
+def _patch_ordering(monkeypatch):
+    """Bypass _execute_with_ordering so tests don't need the semaphore/lock machinery."""
+    monkeypatch.setattr(main, "_execute_with_ordering", _passthrough_ordering)
+
+
 def test_inbound_reply_prompt_uses_reply_tool(monkeypatch):
     captured: dict[str, str] = {}
 
@@ -51,9 +61,11 @@ def test_inbound_reply_prompt_uses_reply_tool(monkeypatch):
     async def noop(*args, **kwargs):
         return None
 
+    _patch_ordering(monkeypatch)
     monkeypatch.setattr(main, "call_codex", fake_call_codex)
     monkeypatch.setattr(main.SessionStore, "is_message_processed", return_false)
     monkeypatch.setattr(main.SessionStore, "get_session", return_none)
+    monkeypatch.setattr(main.SessionStore, "get_case_by_thread", return_none)
     monkeypatch.setattr(main.SessionStore, "record_message_result", noop)
     monkeypatch.setattr(main.SessionStore, "store_session", noop)
 
@@ -153,9 +165,11 @@ def test_inbound_reply_reuses_thread_session(monkeypatch):
     async def noop(*args, **kwargs):
         return None
 
+    _patch_ordering(monkeypatch)
     monkeypatch.setattr(main, "call_codex", fake_call_codex)
     monkeypatch.setattr(main.SessionStore, "is_message_processed", return_false)
     monkeypatch.setattr(main.SessionStore, "get_session", return_existing_session)
+    monkeypatch.setattr(main.SessionStore, "get_case_by_thread", noop)
     monkeypatch.setattr(main.SessionStore, "record_message_result", noop)
     monkeypatch.setattr(main.SessionStore, "store_session", record_session)
 
@@ -229,9 +243,11 @@ def test_inbound_reply_requires_gmail_tool_completion(monkeypatch):
     async def record_message_result(**kwargs):
         recorded.append(kwargs)
 
+    _patch_ordering(monkeypatch)
     monkeypatch.setattr(main, "call_codex", fake_call_codex)
     monkeypatch.setattr(main.SessionStore, "is_message_processed", return_false)
     monkeypatch.setattr(main.SessionStore, "get_session", return_none)
+    monkeypatch.setattr(main.SessionStore, "get_case_by_thread", return_none)
     monkeypatch.setattr(main.SessionStore, "record_message_result", record_message_result)
     monkeypatch.setattr(main.SessionStore, "store_session", return_none)
 
@@ -281,9 +297,11 @@ def test_inbound_reply_uses_tool_result_when_ack_missing(monkeypatch):
     async def record_message_result(**kwargs):
         recorded.append(kwargs)
 
+    _patch_ordering(monkeypatch)
     monkeypatch.setattr(main, "call_codex", fake_call_codex)
     monkeypatch.setattr(main.SessionStore, "is_message_processed", return_false)
     monkeypatch.setattr(main.SessionStore, "get_session", return_none)
+    monkeypatch.setattr(main.SessionStore, "get_case_by_thread", return_none)
     monkeypatch.setattr(main.SessionStore, "record_message_result", record_message_result)
     monkeypatch.setattr(main.SessionStore, "store_session", return_none)
 
@@ -346,9 +364,11 @@ def test_inbound_reply_prefers_tool_result_when_ack_mismatches(monkeypatch, capl
     async def record_message_result(**kwargs):
         recorded.append(kwargs)
 
+    _patch_ordering(monkeypatch)
     monkeypatch.setattr(main, "call_codex", fake_call_codex)
     monkeypatch.setattr(main.SessionStore, "is_message_processed", return_false)
     monkeypatch.setattr(main.SessionStore, "get_session", return_none)
+    monkeypatch.setattr(main.SessionStore, "get_case_by_thread", return_none)
     monkeypatch.setattr(main.SessionStore, "record_message_result", record_message_result)
     monkeypatch.setattr(main.SessionStore, "store_session", return_none)
 

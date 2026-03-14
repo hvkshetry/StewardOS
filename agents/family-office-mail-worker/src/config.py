@@ -97,7 +97,7 @@ class Settings(BaseSettings):
     plane_api_token: str = ""
     plane_webhook_secret: str = ""
 
-    database_url: str = "sqlite+aiosqlite:///./family_office_mail_worker.db"
+    database_url: str = "postgresql+asyncpg://orchestration:changeme@localhost:5434/orchestration"
     log_level: str = "INFO"
 
     def resolve_persona_dir(self, alias: str) -> str | None:

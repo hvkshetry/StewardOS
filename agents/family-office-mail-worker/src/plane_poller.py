@@ -114,27 +114,13 @@ async def _fetch_latest_comment(
 
 
 async def _get_all_poll_workspaces() -> set[str]:
-    """Return workspace slugs with active PM sessions."""
-    return set(await SessionStore.get_active_pm_workspaces())
+    """Return workspace slugs with active cases."""
+    return set(await SessionStore.get_active_case_workspaces())
 
 
 async def _get_project_ids_for_workspace(workspace_slug: str) -> set[str]:
-    """Get project IDs to poll from active PM sessions in this workspace."""
-    from sqlalchemy import select as sa_select
-
-    from src.session_store import PmSession
-
-    await SessionStore.initialize()
-    async with SessionStore._session_maker() as session:
-        pm_project_ids = (
-            await session.execute(
-                sa_select(PmSession.project_id).where(
-                    PmSession.workspace_slug == workspace_slug,
-                    PmSession.status == "active",
-                )
-            )
-        ).scalars().all()
-    return set(pm_project_ids)
+    """Get project IDs to poll from active cases in this workspace."""
+    return set(await SessionStore.get_active_case_project_ids(workspace_slug))
 
 
 async def poll_plane_workspaces() -> None:
@@ -217,8 +203,8 @@ async def _poll_workspace(
             if not parent_id:
                 continue
 
-            pm_session = await SessionStore.get_pm_session_by_case(parent_id)
-            if pm_session is None or pm_session["status"] != "active":
+            case = await SessionStore.get_case(parent_id)
+            if case is None or case["status"] != "active":
                 continue
 
             # All children of this case — check if all are done
@@ -244,7 +230,7 @@ async def _poll_workspace(
                     len(siblings), parent_id[:12], workspace_slug,
                 )
                 await _resume_lead_session(
-                    client, pm_session, parent_id,
+                    client, case, parent_id,
                     workspace_slug=workspace_slug,
                     project_id=project_id,
                     states=states,
@@ -255,7 +241,7 @@ async def _poll_workspace(
 
 async def _resume_lead_session(
     client: httpx.AsyncClient,
-    pm_session: dict,
+    case: dict,
     case_id: str,
     *,
     workspace_slug: str,
@@ -269,10 +255,11 @@ async def _resume_lead_session(
     lead persona's Codex session to synthesize and reply to the human.
     """
     from src.codex_caller import call_codex
+    from src.main import _execute_with_ordering
 
-    lead_alias = pm_session["lead_alias"]
-    session_key = pm_session["session_key"]
-    snapshot = await SessionStore.get_case_snapshot(case_id)
+    lead_alias = case["lead_alias"]
+    session_key = case["session_key"]
+    si = case.get("structured_input") or {}
 
     agent_config_dir = settings.resolve_persona_dir(lead_alias)
     if not agent_config_dir:
@@ -312,7 +299,7 @@ async def _resume_lead_session(
         results_lines.append(
             f"### +{child_alias}: {child_title}\n"
             f"State: {child_state}\n"
-            f"{result_text[:5000]}"
+            f"{result_text[:10000]}"
         )
     specialist_results = "\n\n".join(results_lines) if results_lines else "(no child task details available)"
 
@@ -335,80 +322,178 @@ async def _resume_lead_session(
 
     # Try to resume the existing Codex session
     codex_session_id = await SessionStore.get_session(session_key)
-    result = None
 
-    if codex_session_id:
-        result = await call_codex(
-            agent_config_dir=agent_config_dir,
-            prompt=resume_prompt,
-            session_id=codex_session_id,
-        )
-        if not result.success:
-            logger.warning(
-                "Codex session resume failed for case %s (session %s): %s — trying fresh session",
-                case_id[:12], codex_session_id[:12], result.error,
-            )
-            result = None
+    # Use the same ordering key as _run_persona_and_reply (session_key = gmail:{alias}:{thread_id})
+    # so lead-resume and inbound email handling never race on the same thread.
+    ordering_key = session_key
 
-    if result is None:
-        # Fresh session fallback — include full context from snapshot
-        context_text = snapshot.get("condensed_context", "") if snapshot else ""
-        progress_email = snapshot.get("last_human_email_body", "") if snapshot else ""
-        progress_section = (
-            f"\nProgress email you sent to the human:\n{progress_email}\n"
-            if progress_email else ""
-        )
-        fallback_prompt = (
-            f"You are the +{lead_alias} persona. You previously delegated tasks for a case "
-            f"and all tasks have now been completed.\n\n"
-            f"Case context:\n{context_text}\n\n"
-            f"{progress_section}"
-            f"Specialist results:\n{specialist_results}\n\n"
-            f"Compose a synthesized HTML reply to the human and send it using "
-            f"`google-workspace-agent-rw.reply_gmail_message`.\n"
-            f"The source email's message_id is in the case context above — use it for the reply.\n\n"
-            f"Required reply parameters:\n"
-            f"- body_format: \"html\"\n"
-            f"- from_name: \"{display_name}\"\n"
-            f"- from_email: \"{from_email}\"\n"
-            f"- body: <your synthesized HTML reply>\n"
-        )
-        result = await call_codex(
-            agent_config_dir=agent_config_dir,
-            prompt=fallback_prompt,
-        )
-
-    if result and result.success:
-        new_session_id = result.metadata.get("session_id")
-        if new_session_id:
-            await SessionStore.store_session(session_key, new_session_id)
-
-        # Verify the Gmail reply tool was actually invoked before closing
+    # Wrap the entire resume + post-processing in a guarded coroutine so
+    # the case-status check AND close_case() both happen *inside* the
+    # ordering lock.  Two concurrent sibling-checks will serialize on the
+    # lock; the second one sees the case already closed and skips.
+    async def _guarded_resume():
         from src.main import _GMAIL_REPLY_TOOL, _extract_gmail_tool_completion
 
-        reply_verified = _extract_gmail_tool_completion(
-            result.metadata, {_GMAIL_REPLY_TOOL}
-        ) is not None
+        fresh = await SessionStore.get_case(case_id)
+        if fresh is None or fresh["status"] != "active":
+            logger.info("Case %s already closed — skipping duplicate resume", case_id[:12])
+            return
 
-        if reply_verified:
-            logger.info("Lead persona +%s completed synthesis for case %s", lead_alias, case_id[:12])
-            await SessionStore.upsert_case_snapshot(
-                case_id=case_id,
-                condensed_context=(
-                    (snapshot.get("condensed_context", "") if snapshot else "")
+        result = None
+        if codex_session_id:
+            result = await call_codex(
+                agent_config_dir=agent_config_dir,
+                prompt=resume_prompt,
+                session_id=codex_session_id,
+            )
+            if not result.success:
+                logger.warning(
+                    "Codex session resume failed for case %s (session %s): %s — trying fresh session",
+                    case_id[:12], codex_session_id[:12], result.error,
+                )
+                result = None
+
+        if result is None:
+            # Fresh session fallback — enrich with structured_input (llmenron Site 3 fix)
+            original_email = si.get("original_email_body", "")
+            delegation_rationale = si.get("delegation_rationale", "")
+            progress_email = case.get("last_human_email_body") or ""
+
+            context_section = f"Case context:\n{delegation_rationale}\n\n" if delegation_rationale else ""
+            original_section = f"Original email from the human:\n{original_email[:3000]}\n\n" if original_email else ""
+            progress_section = f"Progress email you sent to the human:\n{progress_email}\n\n" if progress_email else ""
+
+            # Include message_id for reply targeting
+            source_message_id = si.get("message_id", "")
+            message_id_section = f"Source Gmail message_id: {source_message_id}\n\n" if source_message_id else ""
+
+            fallback_prompt = (
+                f"You are the +{lead_alias} persona. You previously delegated tasks for a case "
+                f"and all tasks have now been completed.\n\n"
+                f"{context_section}"
+                f"{original_section}"
+                f"{message_id_section}"
+                f"{progress_section}"
+                f"Specialist results:\n{specialist_results}\n\n"
+                f"Compose a synthesized HTML reply to the human and send it using "
+                f"`google-workspace-agent-rw.reply_gmail_message`.\n"
+                f"Use the source Gmail message_id above for the reply.\n\n"
+                f"Required reply parameters:\n"
+                f"- body_format: \"html\"\n"
+                f"- from_name: \"{display_name}\"\n"
+                f"- from_email: \"{from_email}\"\n"
+                f"- body: <your synthesized HTML reply>\n"
+            )
+            logger.info("METRIC fallback_resume case=%s lead=+%s", case_id[:12], lead_alias)
+            result = await call_codex(
+                agent_config_dir=agent_config_dir,
+                prompt=fallback_prompt,
+            )
+
+        # ── Post-processing (still inside the ordering lock) ──
+        if result and result.success:
+            new_session_id = result.metadata.get("session_id")
+            if new_session_id:
+                await SessionStore.store_session(session_key, new_session_id)
+
+            reply_verified = _extract_gmail_tool_completion(
+                result.metadata, {_GMAIL_REPLY_TOOL}
+            ) is not None
+
+            if reply_verified:
+                # Observability: case-completion latency
+                delegated_at = si.get("delegated_at")
+                if delegated_at:
+                    try:
+                        dt = datetime.fromisoformat(delegated_at)
+                        latency = (datetime.now(timezone.utc) - dt).total_seconds()
+                        logger.info(
+                            "METRIC case_completion_latency_seconds=%.0f case=%s lead=+%s",
+                            latency, case_id[:12], lead_alias,
+                        )
+                    except (ValueError, TypeError):
+                        pass
+                logger.info("Lead persona +%s completed synthesis for case %s", lead_alias, case_id[:12])
+                # Update structured_input to mark resolution
+                updated_si = dict(si)
+                updated_si["delegation_rationale"] = (
+                    updated_si.get("delegation_rationale", "")
                     + "\n\n--- All delegation tasks resolved ---"
-                ),
+                )
+                await SessionStore.update_case(
+                    case_id,
+                    structured_input=updated_si,
+                )
+                await SessionStore.close_case(case_id)
+            else:
+                logger.warning(
+                    "Lead persona +%s synthesis succeeded but Gmail reply not verified for case %s "
+                    "— keeping case open for retry",
+                    lead_alias, case_id[:12],
+                )
+        elif result is not None:
+            logger.error(
+                "Codex resume failed for case %s (lead +%s) — "
+                "case stays open; next human email on thread will trigger response",
+                case_id[:12], lead_alias,
             )
-            await SessionStore.close_pm_session(case_id)
-        else:
-            logger.warning(
-                "Lead persona +%s synthesis succeeded but Gmail reply not verified for case %s "
-                "— keeping PM session open for retry",
-                lead_alias, case_id[:12],
+
+    await _execute_with_ordering(ordering_key, _guarded_resume())
+
+
+async def check_case_completion(case_id: str, workspace_slug: str) -> None:
+    """Immediately check if all siblings under a case are done (Fix B).
+
+    Called from main.py after specialist completion to avoid waiting for
+    the next poll cycle (up to 300s latency). The polling loop remains as
+    a safety net.
+    """
+    if not settings.plane_base_url or not settings.plane_api_token:
+        return
+
+    case = await SessionStore.get_case(case_id)
+    if case is None or case["status"] != "active":
+        return
+
+    project_id = case["project_id"]
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        states = await _fetch_workspace_states(client, workspace_slug, project_id)
+
+        try:
+            children = await _fetch_child_work_items(
+                client, workspace_slug, project_id, case_id,
             )
-    else:
-        logger.error(
-            "Codex resume failed for case %s (lead +%s) — "
-            "case stays open; next human email on thread will trigger response",
-            case_id[:12], lead_alias,
+        except httpx.HTTPStatusError:
+            return
+
+        if not children:
+            return
+
+        for child in children:
+            child_state_id = str(child.get("state", ""))
+            child_group = states.get(child_state_id, {}).get("group", "").lower()
+            if child_group not in _DONE_STATE_GROUPS:
+                return  # Not all done yet
+
+        # All children done — dedupe via delivery key
+        dedupe_key = f"sibling-check:{case_id}"
+        if await SessionStore.is_plane_delivery_processed(dedupe_key):
+            return
+
+        logger.info(
+            "Immediate sibling-check: all %d children complete for case %s — resuming lead",
+            len(children), case_id[:12],
         )
+        await _resume_lead_session(
+            client, case, case_id,
+            workspace_slug=workspace_slug,
+            project_id=project_id,
+            states=states,
+        )
+        # Only record the dedupe key if the case was closed (resume succeeded
+        # and Gmail reply was verified). If it's still open, allow the poller
+        # or the next sibling-check trigger to retry.
+        refreshed = await SessionStore.get_case(case_id)
+        if refreshed and refreshed["status"] == "closed":
+            await SessionStore.record_plane_delivery(dedupe_key)

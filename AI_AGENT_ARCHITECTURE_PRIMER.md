@@ -1,6 +1,6 @@
 # AI Agent Architecture Primer
 
-Last verified: 2026-03-13
+Last verified: 2026-03-14
 
 This file exists to prevent a recurring failure mode for AI coding agents: assuming that `localhost` always means "local dev" and assuming that the absence of a local systemd unit means a service is not live.
 

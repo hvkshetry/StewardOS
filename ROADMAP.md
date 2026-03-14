@@ -22,6 +22,8 @@
 - News provider migration: GDELT → Google News RSS + yfinance for market news
 - OCF (Open Cap Format) ingestion for private company cap table tracking
 - Document lifecycle: Paperless-ngx integration with estate entity linking, review policies, version chain tracking
+- Cross-system identity graph: queryable work-item/external-object graph (WorkItemNode, ExternalObject, Edge tables) with auto-population on Case creation and edge resolution
+- Lightweight request tier: tracked-but-lightweight requests with create/resolve/promote lifecycle, graph linkage, and auto-tracking on direct replies
 
 ## In Progress
 

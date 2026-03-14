@@ -10,6 +10,7 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-E
     CREATE DATABASE household_tax;
     CREATE DATABASE family_edu;
     CREATE DATABASE health_graph;
+    CREATE DATABASE orchestration;
 
     -- Estate-planning schema user
     CREATE USER estate WITH PASSWORD '${ESTATE_DB_PASSWORD}';
@@ -21,6 +22,8 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-E
     CREATE USER family_edu WITH PASSWORD '${FAMILY_EDU_DB_PASSWORD:-${ESTATE_DB_PASSWORD:-changeme}}';
     -- Health graph schema user (default to estate password if HEALTH_DB_PASSWORD is not set)
     CREATE USER health WITH PASSWORD '${HEALTH_DB_PASSWORD:-${ESTATE_DB_PASSWORD:-changeme}}';
+    -- Orchestration schema user (mail worker, delegation state)
+    CREATE USER orchestration WITH PASSWORD '${ORCHESTRATION_DB_PASSWORD:-${ESTATE_DB_PASSWORD:-changeme}}';
 
     \connect estate_planning
     CREATE SCHEMA IF NOT EXISTS estate AUTHORIZATION estate;
@@ -57,5 +60,12 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-E
     GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA family_edu TO family_edu;
     ALTER DEFAULT PRIVILEGES IN SCHEMA family_edu GRANT ALL ON TABLES TO family_edu;
     ALTER DEFAULT PRIVILEGES IN SCHEMA family_edu GRANT ALL ON SEQUENCES TO family_edu;
+
+    \connect orchestration
+    CREATE SCHEMA IF NOT EXISTS orchestration AUTHORIZATION orchestration;
+    GRANT USAGE ON SCHEMA orchestration TO orchestration;
+    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA orchestration TO orchestration;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA orchestration GRANT ALL ON TABLES TO orchestration;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA orchestration GRANT ALL ON SEQUENCES TO orchestration;
 
 EOSQL

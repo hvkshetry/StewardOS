@@ -49,6 +49,35 @@ Before submitting any contribution, verify it contains none of the following:
    scripts/verify_upstreams.sh
    ```
 
+### Shared Library (`servers/lib/`)
+
+Duplicated domain logic lives in `stewardos-lib`. When adding shared functions:
+
+- Pure helpers → `constants.py` or `json_utils.py`
+- Database operations → `domain_ops.py` (accept `asyncpg.Pool`, return `asyncpg.Record`)
+- Add tests in `servers/lib/tests/`
+
+Consuming servers use a local path dep — see [`servers/lib/README.md`](servers/lib/README.md).
+
+### Server Decomposition
+
+DB-backed servers use the `register_<domain>_tools(mcp, get_pool)` pattern:
+
+- `server.py` is a thin orchestrator — no tool logic inline
+- Each domain module registers its tools via the decorator pattern
+- Tests use `FakeMCP` + `mock_asyncpg_pool` from `tests/support/`
+
+### Testing
+
+```bash
+make test-all        # run all project test suites
+make test-server NAME=health-graph-mcp  # run one server
+make lint            # ruff check
+make verify-skills   # skill-to-tool contract verification
+```
+
+Tests run per-project via `uv run --extra dev pytest tests/ -v`. Add `pytest` (and `pytest-asyncio` for async tests) to `[project.optional-dependencies] dev` in each server's `pyproject.toml`.
+
 ### Sensitive files
 
 Do not commit:

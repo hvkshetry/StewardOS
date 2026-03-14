@@ -426,6 +426,33 @@ class TestCashWeightScaling:
         assert quality["zero_return_excluded_weight_sum"] == pytest.approx(0.5)
 
 
+class TestPriceCaching:
+    """Verify short-lived yfinance results are reused across identical calls."""
+
+    def test_download_prices_uses_in_memory_cache(self, monkeypatch):
+        prices_module._PRICE_CACHE.clear()
+
+        calls = {"count": 0}
+        dates = pd.date_range("2026-01-01", periods=3, freq="B")
+
+        def _fake_download(**kwargs):
+            calls["count"] += 1
+            return pd.DataFrame({"Close": [100.0, 101.0, 102.0]}, index=dates)
+
+        monkeypatch.setattr(prices_module.yf, "download", _fake_download)
+
+        first, first_error = prices_module._download_prices(["VTI"], lookback_days=30)
+        second, second_error = prices_module._download_prices(["VTI"], lookback_days=30)
+
+        assert calls["count"] == 1
+        assert first_error is None
+        assert second_error is None
+        assert first is not None
+        assert second is not None
+        assert first is not second
+        assert first.equals(second)
+
+
 class TestBarbellGapMath:
     """Verify safe/convex/fragile gap outputs."""
 
@@ -597,6 +624,75 @@ class TestHypotheticalRisk:
         assert result["improves_vs_current"] is True
         assert result["within_policy_limit"] is False
         assert result["verification_pass"] is False
+
+    async def test_hypothetical_risk_reuses_loaded_scope_for_current_result(self, monkeypatch):
+        calls = {"load_scoped_holdings": 0}
+
+        async def _fake_load_scoped_holdings(**kwargs):
+            calls["load_scoped_holdings"] += 1
+            return {
+                "snapshot_as_of": "2026-03-05T00:00:00+00:00",
+                "snapshot_id": "snap_hypothetical",
+                "scope": {"entity": "all", "tax_wrapper": "all", "account_types": "all", "owner": "all"},
+                "warnings": [],
+                "coverage": {},
+                "provenance": {},
+                "holdings": [
+                    {
+                        "accountId": "acct1",
+                        "symbol": "VTI",
+                        "valueInBaseCurrency": 1000.0,
+                        "marketPrice": 100.0,
+                        "quantity": 10.0,
+                        "assetClass": "EQUITY",
+                        "assetSubClass": "US_LARGE_BLEND",
+                        "currency": "USD",
+                    },
+                ],
+            }
+
+        def _fake_download_returns(weights, lookback_days, holdings_meta=None, scale_to_total_weight=False):
+            dates = pd.date_range("2026-01-01", periods=60, freq="B")
+            risk_weight = sum(
+                weight
+                for symbol, weight in weights.items()
+                if symbol not in {"USD", "CASH"} and not symbol.startswith("CASH:")
+            )
+            base = pd.Series([0.001] * 58 + [-0.04, -0.04], index=dates, dtype=float)
+            scaled = base * risk_weight
+            excluded_symbols = [symbol for symbol in weights if symbol == "USD" or symbol.startswith("CASH:")]
+            return scaled, {
+                "missing_symbols": [],
+                "excluded_symbols": excluded_symbols,
+                "zero_return_excluded_symbols": excluded_symbols,
+                "available_symbols": [symbol for symbol in weights if symbol not in excluded_symbols],
+                "original_weight_sum": sum(weights.values()),
+                "tradeable_weight_sum": risk_weight,
+                "available_weight_sum": risk_weight,
+                "missing_tradeable_weight_sum": 0.0,
+                "zero_return_excluded_weight_sum": sum(weights.get(symbol, 0.0) for symbol in excluded_symbols),
+                "weight_coverage_pct": 1.0,
+                "renormalized": False,
+                "scaled_to_total_weight": scale_to_total_weight,
+                "scale_factor": risk_weight,
+                "yfinance_error": None,
+                "observations": int(len(scaled)),
+                "nan_fill_symbols": [],
+                "data_quality_warnings": [],
+            }
+
+        monkeypatch.setattr(risk_module, "_load_scoped_holdings", _fake_load_scoped_holdings)
+        monkeypatch.setattr(risk_module, "_download_returns", _fake_download_returns)
+
+        result = await analyze_hypothetical_portfolio_risk(
+            target_allocations={"USD": 0.5, "VTI": 0.5},
+            include_fx_risk=False,
+            include_decomposition=False,
+            strict=False,
+        )
+
+        assert result["ok"] is True
+        assert calls["load_scoped_holdings"] == 1
 
 
 # ---------------------------------------------------------------------------

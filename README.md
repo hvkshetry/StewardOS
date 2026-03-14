@@ -52,6 +52,8 @@ StewardOS is a self-hosted family-office operating system. It combines 27 contai
 - **Plane PM task delegation**: Cross-persona work items routed through Plane project management with workspace-scoped governance — structural tools enforce `PLANE_HOME_WORKSPACE` boundaries while execution tools allow cross-workspace delegation
 - **Persona-scoped execution**: Each agent runs within its declared tool boundaries — the Portfolio Manager cannot modify budget data, the Comptroller cannot execute trades
 - **Plus-addressed email identity**: Each persona sends from a dedicated Gmail plus-address alias (e.g., `+io`, `+estate`, `+hc`) — agents reply from their persona address via MCP tool calls, maintaining audit trails and routing context
+- **Cross-system identity graph**: Queryable graph linking internal work items (Cases, Requests) to external objects (Gmail threads, documents) via typed edges — auto-populated on Case creation and direct replies
+- **Lightweight request tier**: Tracked requests for quick interactions that don't warrant full Case+Plane delegation — auto-created and resolved on direct replies for audit trail without overhead
 
 ## Architecture at a Glance
 

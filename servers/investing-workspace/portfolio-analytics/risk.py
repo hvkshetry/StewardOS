@@ -1523,20 +1523,17 @@ async def analyze_hypothetical_portfolio_risk(
             f"assumed default USD metadata for: {', '.join(new_symbols)}."
         )
 
-    current_result = await analyze_portfolio_risk(
+    current_result = await _analyze_risk_from_loaded_holdings(
+        holdings=current_holdings,
+        scoped=scoped,
         lookback_days=lookback_days,
-        es_limit=es_limit,
+        es_limit=effective_es_limit,
+        requested_es_limit=es_limit,
+        policy_warnings=policy_warnings,
         risk_model=risk_model,
         illiquid_overrides=illiquid_overrides,
         include_fx_risk=include_fx_risk,
         include_decomposition=include_decomposition,
-        scope_entity=scope_entity,
-        scope_wrapper=scope_wrapper,
-        scope_account_types=scope_account_types,
-        scope_owner=scope_owner,
-        strict=strict,
-        snapshot_id=snapshot_id,
-        as_of=as_of,
     )
     proposed_result = await _analyze_risk_from_loaded_holdings(
         holdings=synthetic_holdings,

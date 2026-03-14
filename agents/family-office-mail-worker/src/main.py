@@ -44,6 +44,10 @@ _SCHEDULED_JOB_STATUS: dict[str, dict] = {}
 _SCHEDULED_JOB_LOCKS: dict[str, asyncio.Lock] = {}
 _QUEUE_DRAIN_TASK: asyncio.Task | None = None
 _QUEUE_DRAIN_LOCK = asyncio.Lock()
+_accepting_work: bool = True
+_CODEX_SEMAPHORE = asyncio.Semaphore(3)
+_THREAD_LOCKS: dict[str, asyncio.Lock] = {}
+_INFLIGHT_TASKS: set[asyncio.Task] = set()
 _ACTION_ACK_MARKER = "ACTION_ACK_JSON:"
 _QUEUE_RETRY_BASE_SECONDS = 30
 _GMAIL_TOOL_SERVER = "google-workspace-agent-rw"
@@ -61,6 +65,30 @@ _ALIAS_WORKSPACE_MAP = {
     "ra": "investment-office",
 }
 _GMAIL_SEND_TOOL = "send_gmail_message"
+
+
+async def _execute_with_ordering(key: str, coro):
+    """Execute a coroutine with per-key ordering and global concurrency limit.
+
+    Tracks the current task in _INFLIGHT_TASKS so graceful shutdown can wait.
+    """
+    task = asyncio.current_task()
+    if task is not None:
+        _INFLIGHT_TASKS.add(task)
+    try:
+        lock = _THREAD_LOCKS.setdefault(key, asyncio.Lock())
+        async with lock:
+            async with _CODEX_SEMAPHORE:
+                return await coro
+    finally:
+        if task is not None:
+            _INFLIGHT_TASKS.discard(task)
+
+
+async def _wait_for_inflight() -> None:
+    """Wait for all tracked in-flight tasks to complete."""
+    if _INFLIGHT_TASKS:
+        await asyncio.gather(*_INFLIGHT_TASKS, return_exceptions=True)
 
 
 def _utc_now_iso() -> str:
@@ -108,7 +136,7 @@ def _scheduled_prompt(job_id: str, recipients: list[str], subject: str, from_ema
             "## Research Analyst Collaboration\n\n"
             "Before writing the brief, collaborate with the Research Analyst (+ra) to get "
             "fresh market intelligence. Use the Codex CLI to invoke the RA persona:\n\n"
-            f"```\nCODEX_HOME={ra_config_dir}/.codex {codex_bin} exec "
+            f"```\n{codex_bin} exec "
             f"--skip-git-repo-check --full-auto -C {ra_config_dir} "
             "\"<your research request>\"\n```\n\n"
             "The RA has access to market-intel-direct, sec-edgar, policy-events, and "
@@ -151,7 +179,7 @@ def _scheduled_prompt(job_id: str, recipients: list[str], subject: str, from_ema
             "## Research Analyst Collaboration\n\n"
             "Before writing the brief, collaborate with the Research Analyst (+ra) to get "
             "end-of-week market synthesis. Use the Codex CLI to invoke the RA persona:\n\n"
-            f"```\nCODEX_HOME={ra_config_dir}/.codex {codex_bin} exec "
+            f"```\n{codex_bin} exec "
             f"--skip-git-repo-check --full-auto -C {ra_config_dir} "
             "\"<your research request>\"\n```\n\n"
             "The RA has access to market-intel-direct, sec-edgar, policy-events, and "
@@ -515,6 +543,9 @@ def _schedule_queue_drain() -> None:
 async def _drain_notification_queue() -> None:
     async with _QUEUE_DRAIN_LOCK:
         while True:
+            if not _accepting_work:
+                logger.info("Queue drain stopping: worker no longer accepting work")
+                return
             queued = await SessionStore.claim_next_notification(
                 claim_timeout_seconds=_notification_claim_timeout_seconds()
             )
@@ -612,11 +643,14 @@ async def _run_scheduled_brief(
         session_id = await SessionStore.get_session(session_key)
 
         logger.info("Running scheduled job %s for +%s", job_id, alias)
-        result = await call_codex(
-            agent_config_dir=agent_config_dir,
-            prompt=prompt,
-            context=context,
-            session_id=session_id,
+        result = await _execute_with_ordering(
+            session_key,
+            call_codex(
+                agent_config_dir=agent_config_dir,
+                prompt=prompt,
+                context=context,
+                session_id=session_id,
+            ),
         )
         if not result.success:
             status["last_status"] = "failed"
@@ -776,14 +810,15 @@ def _start_scheduler() -> None:
 def _stop_scheduler() -> None:
     global _scheduler
     if _scheduler is not None:
-        _scheduler.shutdown(wait=False)
+        _scheduler.shutdown(wait=True)
         _scheduler = None
         logger.info("Scheduled briefs stopped")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _QUEUE_DRAIN_TASK
+    global _QUEUE_DRAIN_TASK, _accepting_work
+    _accepting_work = True
     await SessionStore.initialize()
     Path(settings.codex_scratch_dir).mkdir(parents=True, exist_ok=True)
     _schedule_queue_drain()
@@ -795,6 +830,17 @@ async def lifespan(app: FastAPI):
 
     logger.info("Family Office Mail Worker started on %s:%s", settings.service_host, settings.service_port)
     yield
+
+    _accepting_work = False
+
+    # Stop the scheduler first so no new scheduled briefs start during drain.
+    _stop_scheduler()
+
+    logger.info("Shutdown: draining in-flight Codex calls (up to 5 min)...")
+    try:
+        await asyncio.wait_for(_wait_for_inflight(), timeout=300)
+    except asyncio.TimeoutError:
+        logger.warning("Shutdown: in-flight drain timed out after 300s")
 
     if watch_task:
         watch_task.cancel()
@@ -809,7 +855,6 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
     _QUEUE_DRAIN_TASK = None
-    _stop_scheduler()
 
     logger.info("Family Office Mail Worker shutting down")
 
@@ -959,10 +1004,28 @@ async def _handle_plane_work_item_created(data: dict, *, workspace_slug: str = "
         logger.error("Target alias +%s has no persona directory", target_alias)
         return
 
+    # ── Enrich specialist prompt with parent case context (llmenron Site 2 fix) ──
+    parent_id = str(data.get("parent", "") or "")
+    parent_context_section = ""
+    if parent_id:
+        parent_case = await SessionStore.get_case(parent_id)
+        if parent_case:
+            si = parent_case.get("structured_input") or {}
+            parent_context_section = (
+                "\n--- PARENT CASE CONTEXT ---\n"
+                f"Lead persona: +{parent_case['lead_alias']}\n"
+                f"Reply actor: +{parent_case.get('reply_actor', parent_case['lead_alias'])}\n"
+                f"Workspace: {parent_case['workspace_slug']}\n"
+                f"Project ID: {parent_case['project_id']}\n"
+                f"Original human request:\n{(si.get('original_email_body') or '')[:2000]}\n"
+                "--- END PARENT CASE CONTEXT ---\n"
+            )
+
     prompt = (
         "You have been assigned a delegated task from the lead agent via Plane.\n\n"
         f"Task title: {title}\n"
         f"Task description: {description}\n\n"
+        f"{parent_context_section}"
         "Execute this task using the tools and skills available in your workspace.\n"
         "When finished, provide your findings and analysis as a summary.\n"
         f"{_action_ack_instruction('maintenance')}"
@@ -976,11 +1039,14 @@ async def _handle_plane_work_item_created(data: dict, *, workspace_slug: str = "
     session_key = f"plane:delegation:{work_item_id}"
     session_id = await SessionStore.get_session(session_key)
 
-    result = await call_codex(
-        agent_config_dir=agent_config_dir,
-        prompt=prompt,
-        context=context,
-        session_id=session_id,
+    result = await _execute_with_ordering(
+        f"plane:{work_item_id}",
+        call_codex(
+            agent_config_dir=agent_config_dir,
+            prompt=prompt,
+            context=context,
+            session_id=session_id,
+        ),
     )
 
     new_session_id = result.metadata.get("session_id")
@@ -997,7 +1063,7 @@ async def _handle_plane_work_item_created(data: dict, *, workspace_slug: str = "
         try:
             await _post_plane_comment(
                 data, work_item_id,
-                comment=result.response_text[:5000],
+                comment=result.response_text[:10000],
                 workspace_slug=workspace_slug,
             )
         except Exception:
@@ -1010,6 +1076,19 @@ async def _handle_plane_work_item_created(data: dict, *, workspace_slug: str = "
         logger.exception("Failed to complete Plane work item %s", work_item_id[:12])
 
     logger.info("Specialist +%s completed task %s", target_alias, work_item_id[:12])
+
+    # ── Fix B: Trigger immediate sibling-completion check ──
+    # Instead of waiting for the next poll cycle (up to 300s), check now
+    # whether all siblings under the parent case are done.
+    if parent_id and workspace_slug:
+        try:
+            from src.plane_poller import check_case_completion
+            await check_case_completion(parent_id, workspace_slug)
+        except Exception:
+            logger.debug(
+                "Immediate sibling-check failed for parent %s — poller will retry",
+                parent_id[:12],
+            )
 
 
 async def _post_plane_comment(
@@ -1135,21 +1214,25 @@ async def _run_persona_and_reply(email: IncomingEmail) -> bool:
     session_key = f"gmail:{alias}:{email.thread_id or email.message_id}"
     session_id = await SessionStore.get_session(session_key)
 
-    # Check for existing PM session on this thread (follow-up on delegated case)
+    # Check for existing case on this thread (follow-up on delegated case)
     pm_context_lines = ""
-    pm_session = None
+    active_case = None
     if email.thread_id:
-        pm_session = await SessionStore.get_pm_session_by_thread(email.thread_id)
-        if pm_session:
-            snapshot = await SessionStore.get_case_snapshot(pm_session["case_id"])
+        active_case = await SessionStore.get_case_by_thread(email.thread_id)
+        if active_case:
+            si = active_case.get("structured_input") or {}
             pm_context_lines = (
                 f"\n--- PLANE PM CONTEXT ---\n"
-                f"This thread has an active Plane case: {pm_session['case_id']}\n"
-                f"Workspace: {pm_session['workspace_slug']}\n"
-                f"Case status: {pm_session['status']}\n"
+                f"Active case: {active_case['case_id']}\n"
+                f"Workspace: {active_case['workspace_slug']}\n"
+                f"Lead: +{active_case['lead_alias']}\n"
+                f"Reply actor: +{active_case.get('reply_actor', active_case['lead_alias'])}\n"
+                f"Case status: {active_case['status']}\n"
             )
-            if snapshot and snapshot.get("condensed_context"):
-                pm_context_lines += f"Case context: {snapshot['condensed_context']}\n"
+            if si.get("delegation_rationale"):
+                pm_context_lines += f"Case context: {si['delegation_rationale']}\n"
+            if si.get("original_email_body"):
+                pm_context_lines += f"Original request (truncated): {si['original_email_body'][:500]}\n"
             pm_context_lines += "--- END PM CONTEXT ---"
 
     context = (
@@ -1222,11 +1305,14 @@ async def _run_persona_and_reply(email: IncomingEmail) -> bool:
         f"--- BEGIN EMAIL DATA ---\n{email.body}\n--- END EMAIL DATA ---"
     )
 
-    result = await call_codex(
-        agent_config_dir=agent_config_dir,
-        prompt=prompt,
-        context=context,
-        session_id=session_id,
+    result = await _execute_with_ordering(
+        session_key,
+        call_codex(
+            agent_config_dir=agent_config_dir,
+            prompt=prompt,
+            context=context,
+            session_id=session_id,
+        ),
     )
 
     if not result.success:
@@ -1288,30 +1374,45 @@ async def _run_persona_and_reply(email: IncomingEmail) -> bool:
             return False
 
         home_workspace = _ALIAS_WORKSPACE_MAP.get(alias, "chief-of-staff")
-        await SessionStore.create_pm_session(
-            session_key=session_key,
+        delegation_start = datetime.now(timezone.utc)
+        upsert_result = await SessionStore.upsert_case(
             case_id=case_id,
+            session_key=session_key,
             workspace_slug=home_workspace,
             project_id=project_id,
             lead_alias=alias,
-        )
-        if email.thread_id:
-            await SessionStore.link_thread_to_case(
-                thread_id=email.thread_id,
-                case_id=case_id,
-                workspace_slug=home_workspace,
-            )
-        await SessionStore.upsert_case_snapshot(
-            case_id=case_id,
-            condensed_context=(
-                f"Case created from email: {email.subject}\n"
-                f"Sender: {email.sender_email}\n"
-                f"Lead alias: +{alias}\n"
-                f"Source gmail message_id: {email.message_id}\n"
-                f"Thread ID: {email.thread_id or 'N/A'}"
-            ),
+            thread_id=email.thread_id,
+            reply_actor=alias,
+            structured_input={
+                "original_email_body": email.body[:5000],
+                "original_email_subject": email.subject,
+                "sender": email.sender,
+                "sender_email": email.sender_email,
+                "message_id": email.message_id,
+                "thread_id": email.thread_id,
+                "internet_message_id": email.internet_message_id,
+                "lead_alias": alias,
+                "reply_actor": alias,
+                "delegation_rationale": (
+                    f"Case created from email: {email.subject}\n"
+                    f"Sender: {email.sender_email}\n"
+                    f"Lead alias: +{alias}\n"
+                    f"Source gmail message_id: {email.message_id}\n"
+                    f"Thread ID: {email.thread_id or 'N/A'}"
+                ),
+                "delegated_at": delegation_start.isoformat(),
+            },
             last_human_email_body=action_ack.human_update_html,
         )
+        if not upsert_result["duplicate"]:
+            await SessionStore._register_case_graph(
+                case_id=case_id,
+                thread_id=email.thread_id,
+                message_id=email.message_id,
+                workspace_slug=home_workspace,
+                project_id=project_id,
+                title=email.subject,
+            )
         await SessionStore.record_message_result(
             message_id=email.message_id,
             alias=alias,
@@ -1351,6 +1452,22 @@ async def _run_persona_and_reply(email: IncomingEmail) -> bool:
         fallback_thread_id=email.thread_id,
     )
 
+    # Observability: wrong-thread-attachment detection
+    if thread_id and email.thread_id and thread_id != email.thread_id:
+        logger.warning(
+            "METRIC wrong_thread_attachment alias=+%s expected_thread=%s actual_thread=%s message=%s",
+            alias, email.thread_id[:12], thread_id[:12], email.message_id[:24],
+        )
+
+    # Observability: duplicate-reply detection
+    if sent_message_id and email.thread_id:
+        existing = await SessionStore.get_sent_message_ids_for_thread(email.thread_id, alias)
+        if sent_message_id in existing:
+            logger.warning(
+                "METRIC duplicate_reply alias=+%s thread=%s sent_message_id=%s",
+                alias, email.thread_id[:12], sent_message_id[:24],
+            )
+
     await SessionStore.record_message_result(
         message_id=email.message_id,
         alias=alias,
@@ -1361,17 +1478,35 @@ async def _run_persona_and_reply(email: IncomingEmail) -> bool:
         error=None,
     )
 
-    # Refresh case snapshot on follow-up interactions
-    if pm_session and pm_session.get("case_id"):
-        existing = await SessionStore.get_case_snapshot(pm_session["case_id"])
-        prev_context = existing.get("condensed_context", "") if existing else ""
-        await SessionStore.upsert_case_snapshot(
-            case_id=pm_session["case_id"],
-            condensed_context=(
-                prev_context
-                + f"\n\nFollow-up email from {email.sender_email}: {email.subject}"
-                + f"\nPersona +{alias} replied via email."
-            ),
+    # Auto-track direct replies as lightweight requests for traceability
+    try:
+        req = await SessionStore.create_request(
+            source_system="gmail",
+            source_object_id=email.message_id,
+            assigned_agent=alias,
+            requester=email.sender_email,
+            summary=email.subject[:200],
+            thread_id=email.thread_id,
+        )
+        await SessionStore.resolve_request(
+            req["request_id"],
+            resolution=f"Direct reply by +{alias}",
+        )
+    except Exception:
+        logger.debug("Request auto-tracking failed for %s", email.message_id[:24], exc_info=True)
+
+    # Refresh case structured_input on follow-up interactions
+    if active_case and active_case.get("case_id"):
+        si = dict(active_case.get("structured_input") or {})
+        prev_rationale = si.get("delegation_rationale", "")
+        si["delegation_rationale"] = (
+            prev_rationale
+            + f"\n\nFollow-up email from {email.sender_email}: {email.subject}"
+            + f"\nPersona +{alias} replied via email."
+        )
+        await SessionStore.update_case(
+            active_case["case_id"],
+            structured_input=si,
         )
 
     logger.info(

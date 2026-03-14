@@ -6,6 +6,7 @@ No register function; used by risk.py, drift.py, and other modules.
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -25,6 +26,78 @@ _ZERO_RETURN_EXCLUDED_SYMBOLS = {
     "BRL", "ZAR", "CASH",
 }
 
+_PRICE_CACHE_TTL_SECONDS = max(
+    0.0,
+    float(os.getenv("PORTFOLIO_ANALYTICS_PRICE_CACHE_TTL_SECONDS", "600")),
+)
+_PRICE_ERROR_CACHE_TTL_SECONDS = max(
+    0.0,
+    float(os.getenv("PORTFOLIO_ANALYTICS_PRICE_ERROR_CACHE_TTL_SECONDS", "60")),
+)
+_PRICE_CACHE_MAX_ENTRIES = max(
+    1,
+    int(os.getenv("PORTFOLIO_ANALYTICS_PRICE_CACHE_MAX_ENTRIES", "32")),
+)
+_PRICE_CACHE: dict[tuple[tuple[str, ...], str], dict[str, Any]] = {}
+
+
+def _copy_prices_frame(prices: pd.DataFrame | None) -> pd.DataFrame | None:
+    if prices is None:
+        return None
+    return prices.copy(deep=True)
+
+
+def _price_cache_key(symbols: list[str], start_date: str) -> tuple[tuple[str, ...], str]:
+    normalized = tuple(sorted(str(symbol).upper() for symbol in symbols if str(symbol).strip()))
+    return normalized, start_date
+
+
+def _get_cached_prices(
+    key: tuple[tuple[str, ...], str],
+) -> tuple[pd.DataFrame | None, str | None] | None:
+    if _PRICE_CACHE_TTL_SECONDS <= 0 and _PRICE_ERROR_CACHE_TTL_SECONDS <= 0:
+        return None
+
+    cached = _PRICE_CACHE.get(key)
+    if cached is None:
+        return None
+
+    now = time.time()
+    ttl = _PRICE_CACHE_TTL_SECONDS
+    if cached.get("error") is not None:
+        ttl = _PRICE_ERROR_CACHE_TTL_SECONDS
+
+    if ttl <= 0 or (now - cached["created_at"]) > ttl:
+        _PRICE_CACHE.pop(key, None)
+        return None
+
+    return _copy_prices_frame(cached.get("prices")), cached.get("error")
+
+
+def _store_cached_prices(
+    key: tuple[tuple[str, ...], str],
+    prices: pd.DataFrame | None,
+    error: str | None,
+) -> None:
+    if (
+        prices is None
+        and error is None
+        and _PRICE_CACHE_TTL_SECONDS <= 0
+        and _PRICE_ERROR_CACHE_TTL_SECONDS <= 0
+    ):
+        return
+
+    _PRICE_CACHE[key] = {
+        "created_at": time.time(),
+        "prices": _copy_prices_frame(prices),
+        "error": error,
+    }
+    if len(_PRICE_CACHE) <= _PRICE_CACHE_MAX_ENTRIES:
+        return
+
+    oldest_key = min(_PRICE_CACHE.items(), key=lambda item: item[1]["created_at"])[0]
+    _PRICE_CACHE.pop(oldest_key, None)
+
 
 def _download_prices(
     symbols: list[str],
@@ -32,6 +105,10 @@ def _download_prices(
 ) -> tuple[pd.DataFrame | None, str | None]:
     """Download close prices from yfinance. Returns (prices_df, error_message)."""
     start_date = (datetime.now(timezone.utc) - timedelta(days=max(lookback_days * 2, 120))).date().isoformat()
+    cache_key = _price_cache_key(symbols, start_date)
+    cached = _get_cached_prices(cache_key)
+    if cached is not None:
+        return cached
     try:
         data = yf.download(
             tickers=symbols,
@@ -41,10 +118,14 @@ def _download_prices(
             threads=False,
         )
     except Exception as exc:
-        return None, f"yfinance download failed: {type(exc).__name__}: {exc}"
+        error = f"yfinance download failed: {type(exc).__name__}: {exc}"
+        _store_cached_prices(cache_key, None, error)
+        return None, error
 
     if data is None or data.empty:
-        return None, "yfinance returned empty data"
+        error = "yfinance returned empty data"
+        _store_cached_prices(cache_key, None, error)
+        return None, error
 
     if isinstance(data.columns, pd.MultiIndex):
         if "Close" in data.columns.get_level_values(0):
@@ -62,7 +143,8 @@ def _download_prices(
                 prices = prices.to_frame(name=symbols[0])
 
     prices.columns = [str(col).upper() for col in prices.columns]
-    return prices, None
+    _store_cached_prices(cache_key, prices, None)
+    return _copy_prices_frame(prices), None
 
 
 def _filter_tradeable_symbols(weights: dict[str, float]) -> tuple[dict[str, float], list[str]]:

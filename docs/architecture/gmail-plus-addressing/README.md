@@ -116,7 +116,7 @@ Inbound ──────────→│  ├─ Filter: +insurance → Labe
                                     │ Pub/Sub notification
                                     ▼
                     ┌───────────────────────────────┐
-                    │     Mail Ingress (home-server) │
+                    │     Mail Ingress (home-server)     │
                     │     /webhooks/gmail            │
                     └───────────────┬───────────────┘
                                     │ reverse SSH tunnel

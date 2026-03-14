@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 import src.main as main
+from conftest import get_test_database_url
 from src.codex_caller import parse_codex_jsonl
 from src.config import settings
 from src.main import _ACTION_ACK_MARKER, _build_pubsub_payload, _extract_marked_json, app
@@ -14,8 +15,8 @@ from src.models import AgentResponse
 from src.session_store import SessionStore
 
 
-def _reset_session_store(database_path: Path) -> None:
-    settings.database_url = f"sqlite+aiosqlite:///{database_path}"
+def _reset_session_store(tmp_path: Path) -> None:
+    settings.database_url = get_test_database_url(tmp_path)
     asyncio.run(SessionStore.reset_for_tests())
     asyncio.run(SessionStore.initialize())
 
@@ -72,8 +73,7 @@ def test_parse_codex_jsonl_keeps_mcp_tool_call_completions():
 
 
 def test_session_store_queue_lifecycle(tmp_path):
-    database_path = tmp_path / "mail_worker.sqlite"
-    _reset_session_store(database_path)
+    _reset_session_store(tmp_path)
 
     enqueue_result = asyncio.run(
         SessionStore.enqueue_gmail_notification(
@@ -118,8 +118,7 @@ def test_session_store_queue_lifecycle(tmp_path):
 
 
 def test_session_store_claims_multiple_pending_notifications_in_order(tmp_path):
-    database_path = tmp_path / "mail_worker.sqlite"
-    _reset_session_store(database_path)
+    _reset_session_store(tmp_path)
 
     first = asyncio.run(
         SessionStore.enqueue_gmail_notification(
@@ -150,8 +149,7 @@ def test_session_store_claims_multiple_pending_notifications_in_order(tmp_path):
 
 
 def test_worker_endpoint_enqueues_before_ack(monkeypatch, tmp_path):
-    database_path = tmp_path / "mail_worker.sqlite"
-    _reset_session_store(database_path)
+    _reset_session_store(tmp_path)
 
     monkeypatch.setattr(settings, "worker_shared_secret", "shared-secret")
     monkeypatch.setattr(settings, "watch_renew_enabled", False)
