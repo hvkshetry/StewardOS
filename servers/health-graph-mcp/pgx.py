@@ -41,7 +41,7 @@ def register_pgx_tools(mcp, get_pool, ensure_initialized):
 
     @_tool
     async def run_pgx_pipeline(
-        subject_id: int,
+        person_id: int,
         phenotype_json: str,
         match_json: str = "",
         report_json: str = "",
@@ -90,11 +90,11 @@ def register_pgx_tools(mcp, get_pool, ensure_initialized):
                 conn,
                 source_name=source_name,
                 run_type="pgx_ingest",
-                metadata={"subject_id": subject_id, "allow_unverified": allow_unverified},
+                metadata={"person_id": person_id, "allow_unverified": allow_unverified},
             )
             try:
-                if not await _subject_has_genome_data(conn, subject_id):
-                    raise ValueError(f"subject_id {subject_id} has no genotype data")
+                if not await _subject_has_genome_data(conn, person_id):
+                    raise ValueError(f"person_id {person_id} has no genotype data")
 
                 match_rsids = _extract_rsids(match_payload)
                 if not allow_unverified and not match_rsids:
@@ -102,7 +102,7 @@ def register_pgx_tools(mcp, get_pool, ensure_initialized):
                         "match_json must include rsid-level grounding for this subject "
                         "(none were detected)"
                     )
-                if not allow_unverified and not await _subject_has_any_rsid_match(conn, subject_id, match_rsids):
+                if not allow_unverified and not await _subject_has_any_rsid_match(conn, person_id, match_rsids):
                     raise ValueError(
                         "match_json rsids do not match this subject's genotype calls; "
                         "refusing ungrounded PGx ingestion"
@@ -142,17 +142,17 @@ def register_pgx_tools(mcp, get_pool, ensure_initialized):
 
                     await conn.execute(
                         """INSERT INTO pgx_diplotypes (
-                               subject_id, gene_symbol, source_diplotype, recommendation_diplotype,
+                               person_id, gene_symbol, source_diplotype, recommendation_diplotype,
                                outside_call, match_score, source_name, source_json
                            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
                            ON CONFLICT (
-                               subject_id, gene_symbol, source_name,
+                               person_id, gene_symbol, source_name,
                                COALESCE(source_diplotype, ''), COALESCE(recommendation_diplotype, '')
                            )
                            DO UPDATE SET outside_call = EXCLUDED.outside_call,
                                          match_score = EXCLUDED.match_score,
                                          source_json = EXCLUDED.source_json""",
-                        subject_id,
+                        person_id,
                         gene_symbol,
                         source_diplotype,
                         rec_diplotype,
@@ -165,14 +165,14 @@ def register_pgx_tools(mcp, get_pool, ensure_initialized):
 
                     await conn.execute(
                         """INSERT INTO pgx_phenotypes (
-                               subject_id, gene_symbol, phenotype, activity_score, phenotype_source, source_json
+                               person_id, gene_symbol, phenotype, activity_score, phenotype_source, source_json
                            ) VALUES ($1,$2,$3,$4,$5,$6::jsonb)
                            ON CONFLICT (
-                               subject_id, gene_symbol, COALESCE(phenotype, ''),
+                               person_id, gene_symbol, COALESCE(phenotype, ''),
                                COALESCE(activity_score, ''), COALESCE(phenotype_source, '')
                            )
                            DO UPDATE SET source_json = EXCLUDED.source_json""",
-                        subject_id,
+                        person_id,
                         gene_symbol,
                         phenotype,
                         activity_score,
@@ -199,19 +199,19 @@ def register_pgx_tools(mcp, get_pool, ensure_initialized):
                                     continue
                                 await conn.execute(
                                     """INSERT INTO pgx_recommendations (
-                                           subject_id, gene_symbol, drug_name, recommendation_text,
+                                           person_id, gene_symbol, drug_name, recommendation_text,
                                            source_name, source_record_id, evidence_tier, action_class,
                                            confidence_score, metadata
                                        ) VALUES ($1,$2,$3,$4,$5,$6,1,'actionable_with_guardrails',$7,$8::jsonb)
                                        ON CONFLICT (
-                                           subject_id, COALESCE(gene_symbol, ''), COALESCE(drug_name, ''),
+                                           person_id, COALESCE(gene_symbol, ''), COALESCE(drug_name, ''),
                                            source_name, COALESCE(source_record_id, ''), recommendation_text
                                        )
                                        DO UPDATE SET evidence_tier = EXCLUDED.evidence_tier,
                                                      action_class = EXCLUDED.action_class,
                                                      confidence_score = EXCLUDED.confidence_score,
                                                      metadata = EXCLUDED.metadata""",
-                                    subject_id,
+                                    person_id,
                                     gene_symbol,
                                     drug_name,
                                     rec_text,
@@ -245,47 +245,47 @@ def register_pgx_tools(mcp, get_pool, ensure_initialized):
                 )
 
     @_tool
-    async def get_pgx_profile(subject_id: int) -> dict:
+    async def get_pgx_profile(person_id: int) -> dict:
         """Get PGx profile for a subject."""
         await ensure_initialized()
         pool = await get_pool()
         async with pool.acquire() as conn:
             diplotypes = await conn.fetch(
                 """SELECT * FROM pgx_diplotypes
-                   WHERE subject_id=$1
+                   WHERE person_id=$1
                    ORDER BY id DESC""",
-                subject_id,
+                person_id,
             )
             phenotypes = await conn.fetch(
                 """SELECT * FROM pgx_phenotypes
-                   WHERE subject_id=$1
+                   WHERE person_id=$1
                    ORDER BY id DESC""",
-                subject_id,
+                person_id,
             )
             recommendations = await conn.fetch(
                 """SELECT * FROM pgx_recommendations
-                   WHERE subject_id=$1
+                   WHERE person_id=$1
                    ORDER BY id DESC""",
-                subject_id,
+                person_id,
             )
         return {
-            "subject_id": subject_id,
+            "person_id": person_id,
             "diplotypes": _rows_to_dicts(diplotypes),
             "phenotypes": _rows_to_dicts(phenotypes),
             "recommendations": _rows_to_dicts(recommendations),
         }
 
     @_tool
-    async def list_pgx_recommendations(subject_id: int) -> list[dict]:
+    async def list_pgx_recommendations(person_id: int) -> list[dict]:
         """List policy-annotated PGx recommendations."""
         await ensure_initialized()
         pool = await get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """SELECT * FROM pgx_recommendations
-                   WHERE subject_id=$1
+                   WHERE person_id=$1
                    ORDER BY id DESC""",
-                subject_id,
+                person_id,
             )
             output = []
             for row in rows:

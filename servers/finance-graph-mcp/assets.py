@@ -45,7 +45,7 @@ def register_assets_tools(mcp, get_pool):
         """
         pool = await get_pool()
         query = """
-            SELECT a.id, a.name, a.asset_type, a.current_valuation_observation_id,
+            SELECT a.id, a.name, a.asset_type,
                    cvo.value_amount AS current_valuation_amount,
                    cvo.value_currency AS valuation_currency,
                    cvo.valuation_date AS valuation_date,
@@ -57,7 +57,7 @@ def register_assets_tools(mcp, get_pool):
                    at.region_code,
                    rea.property_type
             FROM assets a
-            LEFT JOIN valuation_observations cvo ON cvo.id = a.current_valuation_observation_id
+            LEFT JOIN finance.valuation_observations cvo ON cvo.asset_id = a.id AND cvo.is_current = true
             LEFT JOIN jurisdictions j ON a.jurisdiction_id = j.id
             LEFT JOIN entities e ON a.owner_entity_id = e.id
             LEFT JOIN people p ON a.owner_person_id = p.id
@@ -430,7 +430,7 @@ def register_assets_tools(mcp, get_pool):
 
                 promotion_payload = {
                     "promoted_to_current": False,
-                    "current_valuation_observation_id": None,
+                    "current_observation_id": None,
                 }
                 if current_valuation_amount is not None:
                     observation = await _insert_valuation_observation(
@@ -453,20 +453,21 @@ def register_assets_tools(mcp, get_pool):
                     )
                 elif asset_id:
                     existing_current = await conn.fetchval(
-                        "SELECT current_valuation_observation_id FROM assets WHERE id = $1",
+                        "SELECT id FROM finance.valuation_observations WHERE asset_id = $1 AND is_current = true",
                         resolved_asset_id,
                     )
-                    promotion_payload["current_valuation_observation_id"] = (
+                    promotion_payload["current_observation_id"] = (
                         int(existing_current) if existing_current is not None else None
                     )
 
                 asset_view = await conn.fetchrow(
-                    """SELECT a.id, a.name, a.asset_type, a.current_valuation_observation_id,
+                    """SELECT a.id, a.name, a.asset_type,
+                              cvo.id AS current_observation_id,
                               cvo.value_amount AS current_valuation_amount,
                               cvo.value_currency AS valuation_currency,
                               cvo.valuation_date AS valuation_date
                        FROM assets a
-                       LEFT JOIN valuation_observations cvo ON cvo.id = a.current_valuation_observation_id
+                       LEFT JOIN finance.valuation_observations cvo ON cvo.asset_id = a.id AND cvo.is_current = true
                        WHERE a.id = $1""",
                     resolved_asset_id,
                 )
@@ -479,7 +480,7 @@ def register_assets_tools(mcp, get_pool):
         payload["jurisdiction_code"] = normalized_jurisdiction
         payload["asset_type"] = derived_asset_type
         payload["real_estate_details_updated"] = bool(should_upsert_real_estate and resolved_country)
-        payload["current_valuation_observation_id"] = asset_view["current_valuation_observation_id"]
+        payload["current_observation_id"] = asset_view["current_observation_id"]
         payload["current_valuation_amount"] = _float_or_none(asset_view["current_valuation_amount"])
         payload["valuation_currency"] = asset_view["valuation_currency"]
         payload["valuation_date"] = (

@@ -19,7 +19,7 @@ def register_assertion_tools(mcp, get_pool, ensure_initialized):
     async def ingest_clinical_assertions(
         source_name: str,
         assertions_json: str | dict | list,
-        subject_id: int = 0,
+        person_id: int = 0,
     ) -> dict:
         """Ingest clinical assertions from curated sources."""
         return await ingest_clinical_assertions_tool(
@@ -27,7 +27,7 @@ def register_assertion_tools(mcp, get_pool, ensure_initialized):
             ensure_initialized=ensure_initialized,
             source_name=source_name,
             assertions_json=assertions_json,
-            subject_id=subject_id,
+            person_id=person_id,
         )
 
     @_tool
@@ -51,7 +51,7 @@ def register_assertion_tools(mcp, get_pool, ensure_initialized):
     async def ingest_trait_associations(
         source_name: str,
         associations_json: str | dict | list,
-        subject_id: int = 0,
+        person_id: int = 0,
     ) -> dict:
         """Ingest GWAS/PGS-style trait associations with subject-grounded variant checks."""
         return await ingest_trait_associations_tool(
@@ -59,16 +59,16 @@ def register_assertion_tools(mcp, get_pool, ensure_initialized):
             ensure_initialized=ensure_initialized,
             source_name=source_name,
             associations_json=associations_json,
-            subject_id=subject_id,
+            person_id=person_id,
         )
 
     @_tool
-    async def get_polygenic_context(subject_id: int, limit: int = 100) -> dict:
+    async def get_polygenic_context(person_id: int, limit: int = 100) -> dict:
         """Retrieve association and polygenic context, with research-mode flags."""
         return await get_polygenic_context_tool(
             get_pool=get_pool,
             ensure_initialized=ensure_initialized,
-            subject_id=subject_id,
+            person_id=person_id,
             limit=limit,
         )
 
@@ -117,10 +117,10 @@ def register_assertion_tools(mcp, get_pool, ensure_initialized):
         )
 
     @_tool
-    async def get_wellness_recommendations(subject_id: int) -> dict:
+    async def get_wellness_recommendations(person_id: int) -> dict:
         """Return policy-gated recommendation summary for wellness advisor."""
         return await get_wellness_recommendations_tool(
             get_pool=get_pool,
             ensure_initialized=ensure_initialized,
-            subject_id=subject_id,
+            person_id=person_id,
         )

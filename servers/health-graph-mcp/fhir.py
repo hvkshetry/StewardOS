@@ -15,13 +15,25 @@ from helpers import (
 )
 
 
-def _subject_reference_to_id(ref: str) -> int | None:
+async def _resolve_fhir_patient_id(conn, ref: str) -> int | None:
+    """Resolve a FHIR Patient/{id} reference to a person_id via subject_identifiers."""
     if not ref:
         return None
-    if ref.startswith("Patient/"):
-        raw = ref.split("/", 1)[1]
-        if raw.isdigit():
-            return int(raw)
+    if not ref.startswith("Patient/"):
+        return None
+    fhir_id = ref.split("/", 1)[1].strip()
+    if not fhir_id:
+        return None
+    row = await conn.fetchrow(
+        """SELECT person_id
+           FROM subject_identifiers
+           WHERE upper(btrim(id_type)) = 'FHIR'
+             AND btrim(id_value) = $1
+           LIMIT 1""",
+        fhir_id,
+    )
+    if row is not None:
+        return int(row["person_id"])
     return None
 
 
@@ -32,7 +44,7 @@ def register_fhir_tools(mcp, get_pool, ensure_initialized):
     async def ingest_fhir_bundle(
         source_name: str,
         bundle_json: str | dict,
-        default_subject_id: int = 0,
+        default_person_id: int = 0,
     ) -> dict:
         """Ingest targeted FHIR resources (Observation, DiagnosticReport, Coverage, Claim family)."""
         await ensure_initialized()
@@ -82,15 +94,15 @@ def register_fhir_tools(mcp, get_pool, ensure_initialized):
                     if not isinstance(rtype, str):
                         continue
 
-                    subject_id = default_subject_id if default_subject_id > 0 else None
+                    person_id = default_person_id if default_person_id > 0 else None
                     subject_ref = (
                         resource.get("subject", {}).get("reference")
                         if isinstance(resource.get("subject"), dict)
                         else None
                     )
-                    parsed_subject = _subject_reference_to_id(subject_ref or "")
-                    if parsed_subject is not None:
-                        subject_id = parsed_subject
+                    parsed_person = await _resolve_fhir_patient_id(conn, subject_ref or "")
+                    if parsed_person is not None:
+                        person_id = parsed_person
 
                     requires_subject = rtype in {
                         "DiagnosticReport",
@@ -102,17 +114,17 @@ def register_fhir_tools(mcp, get_pool, ensure_initialized):
                         "ClaimResponse",
                         "ExplanationOfBenefit",
                     }
-                    if requires_subject and not subject_id:
+                    if requires_subject and not person_id:
                         skipped_missing_subject += 1
                         continue
 
                     if rtype == "DiagnosticReport":
                         row = await conn.fetchrow(
                             """INSERT INTO diagnostic_reports (
-                                   subject_id, report_id, status, code, effective_at, issued_at, source_name, payload
+                                   person_id, report_id, status, code, effective_at, issued_at, source_name, payload
                                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
                                RETURNING id""",
-                            subject_id,
+                            person_id,
                             resource.get("id"),
                             resource.get("status"),
                             _first_nonempty(resource.get("code", {}).get("coding", [{}])[0].get("code"))
@@ -149,10 +161,10 @@ def register_fhir_tools(mcp, get_pool, ensure_initialized):
 
                         await conn.execute(
                             """INSERT INTO observations (
-                                   subject_id, diagnostic_report_id, observation_id, status, category, code,
+                                   person_id, diagnostic_report_id, observation_id, status, category, code,
                                    display_name, value_numeric, value_text, unit, effective_at, source_name, payload
                                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)""",
-                            subject_id,
+                            person_id,
                             report_id_fk,
                             resource.get("id"),
                             resource.get("status"),
@@ -177,11 +189,11 @@ def register_fhir_tools(mcp, get_pool, ensure_initialized):
                     elif rtype == "Coverage":
                         row = await conn.fetchrow(
                             """INSERT INTO coverages (
-                                   subject_id, coverage_id, status, payer_name, plan_name, member_id, group_id,
+                                   person_id, coverage_id, status, payer_name, plan_name, member_id, group_id,
                                    start_date, end_date, source_name, payload
                                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)
                                RETURNING id""",
-                            subject_id,
+                            person_id,
                             resource.get("id"),
                             resource.get("status"),
                             _first_nonempty(resource.get("payor", [{}])[0].get("display"))
@@ -232,9 +244,9 @@ def register_fhir_tools(mcp, get_pool, ensure_initialized):
                                 coverage_fk = coverage_map.get(coverage_ref.split("/", 1)[1])
                         await conn.execute(
                             """INSERT INTO coverage_eligibility_requests (
-                                   subject_id, coverage_id, request_id, purpose, service_code, source_name, payload
+                                   person_id, coverage_id, request_id, purpose, service_code, source_name, payload
                                ) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)""",
-                            subject_id,
+                            person_id,
                             coverage_fk,
                             resource.get("id"),
                             _first_nonempty(resource.get("purpose", [None])[0]) if isinstance(resource.get("purpose"), list) else None,
@@ -254,9 +266,9 @@ def register_fhir_tools(mcp, get_pool, ensure_initialized):
                                 coverage_fk = coverage_map.get(coverage_ref.split("/", 1)[1])
                         await conn.execute(
                             """INSERT INTO coverage_eligibility_responses (
-                                   subject_id, coverage_id, response_id, outcome, inforce, source_name, payload
+                                   person_id, coverage_id, response_id, outcome, inforce, source_name, payload
                                ) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)""",
-                            subject_id,
+                            person_id,
                             coverage_fk,
                             resource.get("id"),
                             _first_nonempty(resource.get("outcome")),
@@ -276,11 +288,11 @@ def register_fhir_tools(mcp, get_pool, ensure_initialized):
                                 coverage_fk = coverage_map.get(coverage_ref.split("/", 1)[1])
                         row = await conn.fetchrow(
                             """INSERT INTO claims (
-                                   subject_id, coverage_id, claim_id, status, use_type, priority,
+                                   person_id, coverage_id, claim_id, status, use_type, priority,
                                    service_code, source_name, payload
                                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
                                RETURNING id""",
-                            subject_id,
+                            person_id,
                             coverage_fk,
                             resource.get("id"),
                             _first_nonempty(resource.get("status")),
@@ -307,10 +319,10 @@ def register_fhir_tools(mcp, get_pool, ensure_initialized):
 
                         row = await conn.fetchrow(
                             """INSERT INTO claim_responses (
-                                   subject_id, claim_id, response_id, outcome, disposition, source_name, payload
+                                   person_id, claim_id, response_id, outcome, disposition, source_name, payload
                                ) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
                                RETURNING id""",
-                            subject_id,
+                            person_id,
                             claim_fk,
                             resource.get("id"),
                             _first_nonempty(resource.get("outcome")),
@@ -340,10 +352,10 @@ def register_fhir_tools(mcp, get_pool, ensure_initialized):
 
                         await conn.execute(
                             """INSERT INTO explanations_of_benefit (
-                                   subject_id, claim_id, claim_response_id, eob_id, status,
+                                   person_id, claim_id, claim_response_id, eob_id, status,
                                    outcome, source_name, payload
                                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)""",
-                            subject_id,
+                            person_id,
                             claim_fk,
                             claim_resp_fk,
                             resource.get("id"),

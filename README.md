@@ -1,6 +1,6 @@
 # StewardOS
 
-StewardOS is a self-hosted family-office operating system. It combines 27 containerized services, 22 MCP servers, 8 role-scoped agent personas, and 57 reusable skills into one platform that runs household finance, investment management, estate planning, health tracking, insurance oversight, and daily operations — with an autonomous agent runtime that executes workflows on schedule or in response to incoming email, and a Plane-based project management layer for cross-persona task delegation.
+StewardOS is a self-hosted family-office operating system. It combines 27 containerized services, 23 MCP servers (including a cross-domain ontology server), 8 role-scoped agent personas, and 57 reusable skills into one platform that runs household finance, investment management, estate planning, health tracking, insurance oversight, and daily operations — with an autonomous agent runtime that executes workflows on schedule or in response to incoming email, a Plane-based project management layer for cross-persona task delegation, and a consolidated PostgreSQL database (`stewardos_db`) with real FK bridges across domain schemas.
 
 > **If you manage your own portfolio, run your own household budget, track your own health, or handle your own estate planning** — StewardOS encodes workflows you already do manually so they run consistently every time. Jump to the [persona](#the-persona-model) that matches how you manage your own affairs.
 

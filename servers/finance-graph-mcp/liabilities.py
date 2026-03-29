@@ -6,12 +6,10 @@ from liability_tool_ops import (
     get_refi_opportunities as _get_refi_opportunities,
     list_liabilities as _list_liabilities,
     list_liability_types as _list_liability_types,
-    list_party_refs as _list_party_refs,
     record_liability_payment as _record_liability_payment,
     record_liability_rate_reset as _record_liability_rate_reset,
     record_refinance_offer as _record_refinance_offer,
     upsert_liability as _upsert_liability,
-    upsert_party_ref as _upsert_party_ref,
 )
 from stewardos_lib.response_ops import make_enveloped_tool as _make_enveloped_tool
 
@@ -25,43 +23,14 @@ def register_liabilities_tools(mcp, get_pool):
         return await _list_liability_types(await get_pool())
 
     @_tool
-    async def upsert_party_ref(
-        party_type: str,
-        legal_name: str,
-        party_uuid: str | None = None,
-        jurisdiction_code: str | None = None,
-        status: str | None = None,
-        metadata: dict | str | None = None,
-    ) -> dict:
-        """Create or update a liability borrower/lender party reference."""
-        return await _upsert_party_ref(
-            await get_pool(),
-            party_type=party_type,
-            legal_name=legal_name,
-            party_uuid=party_uuid,
-            jurisdiction_code=jurisdiction_code,
-            status=status,
-            metadata=metadata,
-        )
-
-    @_tool
-    async def list_party_refs(
-        party_type: str | None = None,
-        limit: int = 200,
-    ) -> list[dict]:
-        """List party references used by liability tracking."""
-        return await _list_party_refs(await get_pool(), party_type=party_type, limit=limit)
-
-    @_tool
     async def upsert_liability(
         name: str,
         liability_type_code: str,
         outstanding_principal: float,
         currency: str,
         liability_id: int | None = None,
-        primary_borrower_uuid: str | None = None,
-        primary_borrower_person_id: int | None = None,
-        primary_borrower_entity_id: int | None = None,
+        borrower_person_id: int | None = None,
+        borrower_entity_id: int | None = None,
         jurisdiction_code: str | None = None,
         collateral_asset_id: int | None = None,
         lender_name: str | None = None,
@@ -92,9 +61,8 @@ def register_liabilities_tools(mcp, get_pool):
             outstanding_principal=outstanding_principal,
             currency=currency,
             liability_id=liability_id,
-            primary_borrower_uuid=primary_borrower_uuid,
-            primary_borrower_person_id=primary_borrower_person_id,
-            primary_borrower_entity_id=primary_borrower_entity_id,
+            borrower_person_id=borrower_person_id,
+            borrower_entity_id=borrower_entity_id,
             jurisdiction_code=jurisdiction_code,
             collateral_asset_id=collateral_asset_id,
             lender_name=lender_name,
@@ -121,7 +89,8 @@ def register_liabilities_tools(mcp, get_pool):
     @_tool
     async def list_liabilities(
         status: str | None = None,
-        primary_borrower_uuid: str | None = None,
+        borrower_person_id: int | None = None,
+        borrower_entity_id: int | None = None,
         collateral_asset_id: int | None = None,
         jurisdiction_code: str | None = None,
         limit: int = 500,
@@ -130,7 +99,8 @@ def register_liabilities_tools(mcp, get_pool):
         return await _list_liabilities(
             await get_pool(),
             status=status,
-            primary_borrower_uuid=primary_borrower_uuid,
+            borrower_person_id=borrower_person_id,
+            borrower_entity_id=borrower_entity_id,
             collateral_asset_id=collateral_asset_id,
             jurisdiction_code=jurisdiction_code,
             limit=limit,
@@ -308,12 +278,14 @@ def register_liabilities_tools(mcp, get_pool):
     async def get_liability_summary(
         status: str = "active",
         jurisdiction: str | None = None,
-        borrower_uuid: str | None = None,
+        borrower_person_id: int | None = None,
+        borrower_entity_id: int | None = None,
     ) -> dict:
         """Return aggregated debt exposure and weighted-rate summary."""
         return await _get_liability_summary(
             await get_pool(),
             status=status,
             jurisdiction=jurisdiction,
-            borrower_uuid=borrower_uuid,
+            borrower_person_id=borrower_person_id,
+            borrower_entity_id=borrower_entity_id,
         )

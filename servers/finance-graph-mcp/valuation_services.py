@@ -68,14 +68,11 @@ def _xbrl_fact_fingerprint(fact: dict) -> str:
 
 async def _current_valuation_row(conn, asset_id: int):
     return await conn.fetchrow(
-        """SELECT a.current_valuation_observation_id,
-                  vo.id AS observation_id,
+        """SELECT vo.id AS observation_id,
                   vo.valuation_date,
                   vo.confidence_score
-           FROM assets a
-           LEFT JOIN valuation_observations vo
-             ON vo.id = a.current_valuation_observation_id
-           WHERE a.id = $1""",
+           FROM finance.valuation_observations vo
+           WHERE vo.asset_id = $1 AND vo.is_current = true""",
         asset_id,
     )
 
@@ -117,24 +114,29 @@ async def promote_current_valuation_observation(
     should_promote = _should_promote_current(current_row, observation_row, normalized_mode)
     current_observation_id = (
         int(current_row["observation_id"])
-        if current_row and current_row.get("observation_id") is not None
+        if current_row is not None
         else None
     )
 
     if should_promote:
         current_observation_id = int(observation_row["id"])
+        # Clear old is_current, set new one — single transaction
         await conn.execute(
-            """UPDATE assets
-               SET current_valuation_observation_id = $1,
-                   updated_at = now()
-               WHERE id = $2""",
-            current_observation_id,
+            """UPDATE finance.valuation_observations
+               SET is_current = false
+               WHERE asset_id = $1 AND is_current = true""",
             asset_id,
+        )
+        await conn.execute(
+            """UPDATE finance.valuation_observations
+               SET is_current = true
+               WHERE id = $1""",
+            current_observation_id,
         )
 
     return {
         "promoted_to_current": should_promote,
-        "current_valuation_observation_id": current_observation_id,
+        "current_observation_id": current_observation_id,
     }
 
 

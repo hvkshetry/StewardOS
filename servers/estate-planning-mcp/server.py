@@ -16,7 +16,7 @@ from cross_cutting import register_cross_cutting_tools
 load_dotenv()
 
 DATABASE_URL = os.environ.get(
-    "DATABASE_URL", "postgresql://estate:changeme@localhost:5434/estate_planning"
+    "DATABASE_URL", "postgresql://estate:changeme@localhost:5434/stewardos_db"
 )
 
 _pool: asyncpg.Pool | None = None

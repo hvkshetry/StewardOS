@@ -22,7 +22,7 @@ Shared data plane services that other applications depend on.
 
 | Service | Image | Dependents | Description |
 |---------|-------|------------|-------------|
-| `personal-db` | PostgreSQL 16 | Paperless-ngx, Ghostfolio, wger, Plane, estate-planning-mcp, finance-graph-mcp, household-tax-mcp, health-graph-mcp, family-edu-mcp | Shared relational database for all stateful services |
+| `personal-db` | PostgreSQL 16 | Paperless-ngx, Ghostfolio, wger, Plane, finance-graph-mcp, estate-planning-mcp, health-graph-mcp, household-tax-mcp, family-edu-mcp, ontology-mcp | Shared relational database — consolidated `stewardos_db` with `core`, `finance`, `estate`, `health`, `tax`, `family_edu`, `orchestration` schemas |
 | `personal-redis` | Redis 7 | Paperless-ngx, Ghostfolio, wger | Cache/queue backend |
 
 ### Tier 2: Application Services
@@ -74,7 +74,11 @@ Infrastructure utilities that are not systems of record.
 
 - [`services/docker-compose.yml`](../../../services/docker-compose.yml)
 - [`services/.env.example`](../../../services/.env.example)
-- [`services/personal-db/init-databases.sh`](../../../services/personal-db/init-databases.sh)
+- [`services/personal-db/init-stewardos-db.sh`](../../../services/personal-db/init-stewardos-db.sh)
+- [`services/personal-db/core_schema.sql`](../../../services/personal-db/core_schema.sql)
+- [`services/personal-db/finance_schema.sql`](../../../services/personal-db/finance_schema.sql)
+- [`services/personal-db/estate_schema.sql`](../../../services/personal-db/estate_schema.sql)
+- [`services/personal-db/health_schema.sql`](../../../services/personal-db/health_schema.sql)
 - [`services/wger/nginx.conf`](../../../services/wger/nginx.conf)
 - [`services/plane/`](../../../services/plane/) — Plane stack configuration and workspace taxonomy
 - [`services/cloudflared/config.yml.template`](../../../services/cloudflared/config.yml.template)

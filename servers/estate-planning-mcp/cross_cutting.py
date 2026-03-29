@@ -64,32 +64,47 @@ def register_cross_cutting_tools(mcp, get_pool):
                     SELECT entity_id, effective_pct
                     FROM get_transitive_ownership($1)
                    )
-                   SELECT j.code AS jurisdiction, a.valuation_currency AS currency,
-                          SUM(a.current_valuation_amount) AS direct_value,
+                   SELECT j.code AS jurisdiction, vo.value_currency AS currency,
+                          SUM(vo.value_amount) AS direct_value,
                           0::numeric AS indirect_value
                    FROM assets a
+                   JOIN finance.valuation_observations vo ON vo.asset_id = a.id AND vo.is_current = true
                    LEFT JOIN jurisdictions j ON a.jurisdiction_id = j.id
                    WHERE a.owner_person_id = $1
-                     AND a.current_valuation_amount IS NOT NULL
-                   GROUP BY j.code, a.valuation_currency
+                   GROUP BY j.code, vo.value_currency
                    UNION ALL
-                   SELECT j.code, a.valuation_currency,
+                   SELECT j.code, vo.value_currency,
                           0::numeric,
-                          SUM(a.current_valuation_amount * pe.effective_pct / 100)
+                          SUM(vo.value_amount * pe.effective_pct / 100)
                    FROM assets a
+                   JOIN finance.valuation_observations vo ON vo.asset_id = a.id AND vo.is_current = true
                    JOIN person_entities pe ON a.owner_entity_id = pe.entity_id
                    LEFT JOIN jurisdictions j ON a.jurisdiction_id = j.id
-                   WHERE a.current_valuation_amount IS NOT NULL
-                   GROUP BY j.code, a.valuation_currency""",
+                   GROUP BY j.code, vo.value_currency""",
                 person_id,
             )
         elif jurisdiction:
             rows = await pool.fetch(
-                "SELECT * FROM v_net_worth_by_jurisdiction WHERE jurisdiction_code = $1",
+                """SELECT j.code AS jurisdiction_code, j.name AS jurisdiction_name, j.country,
+                          vo.value_currency AS currency,
+                          SUM(vo.value_amount) AS total_value, COUNT(*) AS asset_count
+                   FROM assets a
+                   JOIN finance.valuation_observations vo ON vo.asset_id = a.id AND vo.is_current = true
+                   JOIN jurisdictions j ON a.jurisdiction_id = j.id
+                   WHERE j.code = $1
+                   GROUP BY j.code, j.name, j.country, vo.value_currency""",
                 jurisdiction,
             )
         else:
-            rows = await pool.fetch("SELECT * FROM v_net_worth_by_jurisdiction")
+            rows = await pool.fetch(
+                """SELECT j.code AS jurisdiction_code, j.name AS jurisdiction_name, j.country,
+                          vo.value_currency AS currency,
+                          SUM(vo.value_amount) AS total_value, COUNT(*) AS asset_count
+                   FROM assets a
+                   JOIN finance.valuation_observations vo ON vo.asset_id = a.id AND vo.is_current = true
+                   JOIN jurisdictions j ON a.jurisdiction_id = j.id
+                   GROUP BY j.code, j.name, j.country, vo.value_currency"""
+            )
         return _ok_response(
             _attach_ownership_basis(_rows_to_list(rows), ownership_basis),
             provenance={

@@ -65,6 +65,9 @@ _ALIAS_WORKSPACE_MAP = {
     "ra": "investment-office",
 }
 _GMAIL_SEND_TOOL = "send_gmail_message"
+_WORKSPACE_LEAD_ALIAS_MAP: dict[str, str] = {}
+for _alias, _workspace in _ALIAS_WORKSPACE_MAP.items():
+    _WORKSPACE_LEAD_ALIAS_MAP.setdefault(_workspace, _alias)
 
 
 async def _execute_with_ordering(key: str, coro):
@@ -93,6 +96,144 @@ async def _wait_for_inflight() -> None:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _plane_headers() -> dict[str, str]:
+    return {
+        "X-API-Key": settings.plane_api_token,
+        "Content-Type": "application/json",
+    }
+
+
+def _known_plane_workspaces() -> list[str]:
+    return sorted(set(_ALIAS_WORKSPACE_MAP.values()))
+
+
+def _normalize_route_alias(value: str | None) -> str | None:
+    if not value:
+        return None
+    candidate = value.strip().lower().lstrip("+")
+    return candidate or None
+
+
+def _lead_alias_for_workspace(workspace_slug: str, fallback_alias: str) -> str:
+    if _ALIAS_WORKSPACE_MAP.get(fallback_alias) == workspace_slug:
+        return fallback_alias
+    return _WORKSPACE_LEAD_ALIAS_MAP.get(workspace_slug, fallback_alias)
+
+
+async def _find_plane_case_by_thread(thread_id: str) -> dict[str, Any] | None:
+    if not settings.plane_base_url or not settings.plane_api_token or not thread_id:
+        return None
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        for workspace_slug in _known_plane_workspaces():
+            try:
+                project_resp = await client.get(
+                    f"{settings.plane_base_url}/api/v1/workspaces/{workspace_slug}/projects/",
+                    headers=_plane_headers(),
+                )
+                project_resp.raise_for_status()
+            except Exception:
+                logger.debug(
+                    "Failed to list Plane projects for workspace %s while hydrating thread %s",
+                    workspace_slug,
+                    thread_id[:12],
+                    exc_info=True,
+                )
+                continue
+
+            project_payload = project_resp.json()
+            projects = project_payload.get("results", project_payload) if isinstance(project_payload, dict) else project_payload
+            if not isinstance(projects, list):
+                continue
+
+            for project in projects:
+                project_id = str(project.get("id", "") or "")
+                if not project_id:
+                    continue
+                try:
+                    item_resp = await client.get(
+                        f"{settings.plane_base_url}/api/v1/workspaces/{workspace_slug}/projects/{project_id}/work-items/",
+                        headers=_plane_headers(),
+                        params={
+                            "external_source": "gmail_thread",
+                            "external_id": thread_id,
+                            "expand": "coordination",
+                        },
+                    )
+                    item_resp.raise_for_status()
+                except Exception:
+                    logger.debug(
+                        "Failed to resolve Plane work item by thread %s in %s/%s",
+                        thread_id[:12],
+                        workspace_slug,
+                        project_id[:12],
+                        exc_info=True,
+                    )
+                    continue
+
+                payload = item_resp.json()
+                work_item = None
+                if isinstance(payload, dict) and payload.get("id"):
+                    work_item = payload
+                elif isinstance(payload, dict) and isinstance(payload.get("results"), list) and payload["results"]:
+                    work_item = payload["results"][0]
+
+                if work_item:
+                    return {
+                        "workspace_slug": workspace_slug,
+                        "project_id": project_id,
+                        "work_item": work_item,
+                    }
+    return None
+
+
+async def _hydrate_case_from_plane_thread(thread_id: str, fallback_alias: str) -> dict[str, Any] | None:
+    resolved = await _find_plane_case_by_thread(thread_id)
+    if not resolved:
+        return None
+
+    workspace_slug = resolved["workspace_slug"]
+    project_id = resolved["project_id"]
+    work_item = resolved["work_item"]
+    case_id = str(work_item.get("id", "") or "")
+    if not case_id:
+        return None
+
+    coordination = work_item.get("coordination") or {}
+    reply_alias = _normalize_route_alias(coordination.get("reply_identity"))
+    lead_alias = reply_alias or _lead_alias_for_workspace(workspace_slug, fallback_alias)
+    session_key = f"gmail:{lead_alias}:{thread_id}"
+
+    upsert_result = await SessionStore.upsert_case(
+        case_id=case_id,
+        session_key=session_key,
+        workspace_slug=workspace_slug,
+        project_id=project_id,
+        lead_alias=lead_alias,
+        thread_id=thread_id,
+        reply_actor=reply_alias or lead_alias,
+        structured_input={
+            "thread_id": thread_id,
+            "hydrated_from_plane": True,
+            "delegation_rationale": (
+                f"Hydrated active Plane case from external thread identity gmail_thread:{thread_id}"
+            ),
+            "original_email_subject": work_item.get("name", "") or work_item.get("title", ""),
+        },
+    )
+    if not upsert_result["duplicate"]:
+        await SessionStore._register_case_graph(
+            case_id=case_id,
+            thread_id=thread_id,
+            message_id=None,
+            workspace_slug=workspace_slug,
+            project_id=project_id,
+            title=work_item.get("name", "") or work_item.get("title", ""),
+        )
+
+    return await SessionStore.get_case(case_id)
 
 
 def _unique_recipients(addresses: list[str]) -> list[str]:
@@ -946,9 +1087,8 @@ async def process_plane_webhook(
 
     logger.info("Plane webhook: event=%s action=%s", event_type, action)
 
-    # For work item creation events, check if this is a delegated task
-    # that should activate a specialist persona
-    if event_type == "issue" and action == "create":
+    # Delegated tasks may arrive with coordination state on create or update.
+    if event_type == "issue" and action in {"create", "update"}:
         await _handle_plane_work_item_created(data, workspace_slug=payload.get("slug", ""))
 
     # Record both the raw delivery ID and a unified dedupe key so the
@@ -968,32 +1108,41 @@ async def process_plane_webhook(
 async def _handle_plane_work_item_created(data: dict, *, workspace_slug: str = "") -> None:
     """Handle a Plane work item creation webhook.
 
-    If the work item has a `target_alias:{alias}` label, it's a delegation
-    from the lead agent to a specialist persona.  The specialist is invoked
-    via Codex with the task context; on completion the work item is
-    transitioned to a "done" state via the Plane API.
+    If the work item is a delegated child task with `coordination.route_to`
+    set to an agent alias, invoke the specialist persona via Codex. On
+    completion the work item is transitioned to a completed Plane state.
     """
-    labels = data.get("labels", [])
-    target_alias = None
-    for label in labels:
-        label_name = label if isinstance(label, str) else (label.get("name", "") if isinstance(label, dict) else "")
-        if label_name.startswith("target_alias:"):
-            target_alias = label_name.split(":", 1)[1]
-            break
+    coordination = data.get("coordination") or {}
+    target_alias = _normalize_route_alias(coordination.get("route_to"))
+    parent_id = str(data.get("parent", "") or "")
 
-    if not target_alias:
+    if not target_alias or not parent_id:
         return
 
     if target_alias not in settings.alias_persona_map:
-        logger.warning("Plane webhook: unknown target_alias %s", target_alias)
+        logger.warning("Plane webhook: unknown coordination.route_to %s", target_alias)
+        return
+
+    if (coordination.get("coordination_status") or "").lower() in {
+        "approved",
+        "rejected",
+        "replied",
+        "done",
+        "completed",
+        "cancelled",
+    }:
         return
 
     work_item_id = str(data.get("id", ""))
     title = data.get("name", "") or data.get("title", "")
     description = data.get("description_stripped", "") or data.get("description", "") or ""
+    session_key = f"plane:delegation:{work_item_id}"
+    if await SessionStore.get_session(session_key):
+        logger.debug("Plane delegation %s already has a specialist session; skipping duplicate trigger", work_item_id[:12])
+        return
 
     logger.info(
-        "Plane delegation detected: work_item=%s target_alias=+%s title=%s",
+        "Plane delegation detected: work_item=%s route_to=+%s title=%s",
         work_item_id[:12],
         target_alias,
         title[:60],
@@ -1005,7 +1154,6 @@ async def _handle_plane_work_item_created(data: dict, *, workspace_slug: str = "
         return
 
     # ── Enrich specialist prompt with parent case context (llmenron Site 2 fix) ──
-    parent_id = str(data.get("parent", "") or "")
     parent_context_section = ""
     if parent_id:
         parent_case = await SessionStore.get_case(parent_id)
@@ -1033,11 +1181,9 @@ async def _handle_plane_work_item_created(data: dict, *, workspace_slug: str = "
     context = (
         f"Delegated task from Plane\n"
         f"Work item ID: {work_item_id}\n"
-        f"Target alias: +{target_alias}"
+        f"Target route: +{target_alias}\n"
+        f"Parent case ID: {parent_id}"
     )
-
-    session_key = f"plane:delegation:{work_item_id}"
-    session_id = await SessionStore.get_session(session_key)
 
     result = await _execute_with_ordering(
         f"plane:{work_item_id}",
@@ -1045,17 +1191,17 @@ async def _handle_plane_work_item_created(data: dict, *, workspace_slug: str = "
             agent_config_dir=agent_config_dir,
             prompt=prompt,
             context=context,
-            session_id=session_id,
         ),
     )
-
-    new_session_id = result.metadata.get("session_id")
-    if new_session_id:
-        await SessionStore.store_session(session_key, new_session_id)
 
     if not result.success:
         logger.error("Specialist +%s failed for task %s: %s", target_alias, work_item_id[:12], result.error)
         return
+
+    await SessionStore.store_session(
+        session_key,
+        result.metadata.get("session_id") or f"completed:{work_item_id}",
+    )
 
     # Post specialist results as a comment on the work item so the lead
     # persona's resume prompt can read them via the polling loop.
@@ -1126,7 +1272,7 @@ async def _post_plane_comment(
 
 
 async def _complete_plane_work_item(data: dict, work_item_id: str, *, workspace_slug: str = "") -> None:
-    """Transition a Plane work item to the 'completed' state group."""
+    """Mark coordination done and transition a Plane work item to the completed state group."""
     if not settings.plane_base_url or not settings.plane_api_token:
         return
 
@@ -1141,6 +1287,21 @@ async def _complete_plane_work_item(data: dict, work_item_id: str, *, workspace_
     }
 
     async with httpx.AsyncClient(timeout=15.0) as client:
+        coordination_url = (
+            f"{settings.plane_base_url}/api/v1/workspaces/{workspace_slug}"
+            f"/projects/{project_id}/work-items/{work_item_id}/coordination/"
+        )
+        coordination_payload = {
+            "coordination_status": "done",
+            "waiting_on": "",
+            "waiting_since": None,
+            "claimed_by_id": None,
+            "claim_expires_at": None,
+        }
+        resp = await client.patch(coordination_url, headers=headers, json=coordination_payload)
+        resp.raise_for_status()
+        logger.info("Work item %s coordination marked done", work_item_id[:12])
+
         # Find the completed state
         states_url = f"{settings.plane_base_url}/api/v1/workspaces/{workspace_slug}/projects/{project_id}/states/"
         resp = await client.get(states_url, headers=headers)
@@ -1219,6 +1380,8 @@ async def _run_persona_and_reply(email: IncomingEmail) -> bool:
     active_case = None
     if email.thread_id:
         active_case = await SessionStore.get_case_by_thread(email.thread_id)
+        if active_case is None:
+            active_case = await _hydrate_case_from_plane_thread(email.thread_id, alias)
         if active_case:
             si = active_case.get("structured_input") or {}
             pm_context_lines = (
@@ -1281,11 +1444,12 @@ async def _run_persona_and_reply(email: IncomingEmail) -> bool:
         "## Option B: Delegate\n"
         "If the request requires cross-domain work or multi-step tracking:\n\n"
         "Delegation steps:\n"
-        "1) Use `plane-pm.create_case` to create a case in your home workspace. Note the returned `case_id` and `project_id`.\n"
-        "2) For each specialist task, use `plane-pm.create_agent_task` with the case as parent. Note each returned `task_id`.\n"
-        "3) Send the human a progress update via `google-workspace-agent-rw.reply_gmail_message` explaining what you're delegating and to whom. "
+        "1) Use the consolidated Plane MCP surface only: `plane-pm.workspace`, `plane-pm.work_item`, `plane-pm.coordination`, and `plane-pm.project_admin`.\n"
+        "2) Use `plane-pm.coordination` with `operation=\"delegate\"` to create or upsert the root case and any child agent/human tasks in one workflow.\n"
+        "3) When delegating from email, set `external_source=\"gmail_thread\"` and `external_id` to this Gmail thread ID when it is available so follow-up email stays attached to the same Plane case.\n"
+        "4) Send the human a progress update via `google-workspace-agent-rw.reply_gmail_message` explaining what you're delegating and to whom. "
         "Write it in the same natural, human-like HTML style as a direct reply.\n"
-        "4) Return the acknowledgment with all IDs and the progress email HTML in `human_update_html`.\n\n"
+        "5) Return the acknowledgment with all IDs and the progress email HTML in `human_update_html`.\n\n"
         "Available personas for delegation (use the alias as target_alias):\n"
         "  cos (Chief of Staff, workspace: chief-of-staff)\n"
         "  estate (Estate Counsel, workspace: estate-counsel)\n"

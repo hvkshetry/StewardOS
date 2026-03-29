@@ -17,10 +17,11 @@ env = { MEALIE_URL = "http://localhost:9925", MEALIE_API_TOKEN = "${MEALIE_API_T
 enabled_tools = ["get_todays_meal_plan", "get_shopping_list"]
 
 [mcp_servers.actual-budget]
-command = "npx"
-args = ["actual-mcp"]
-env = { ACTUAL_SERVER_URL = "http://localhost:5006" }
-enabled_tools = ["get_budget_summary", "get_transactions"]
+command = "/path/to/stewardos/servers/actual-mcp/scripts/start_with_env.sh"
+args = []
+cwd = "/path/to/stewardos/servers/actual-mcp"
+startup_timeout_sec = 180
+enabled_tools = ["analytics", "transaction", "account", "budget"]
 
 [mcp_servers.grocy]
 command = "uv"

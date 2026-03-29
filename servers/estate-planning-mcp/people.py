@@ -13,7 +13,7 @@ def register_people_tools(mcp, get_pool):
     async def list_people() -> list[dict]:
         """List all family members in the estate-planning graph."""
         pool = await get_pool()
-        rows = await _list_people_query(pool, include_estate_fields=True)
+        rows = await _list_people_query(pool)
         return _rows_to_list(rows)
 
     @_tool
@@ -39,8 +39,7 @@ def register_people_tools(mcp, get_pool):
                       dm.doc_purpose_type,
                       dm.status,
                       dm.effective_date,
-                      dm.expiry_date,
-                      dm.last_reviewed
+                      dm.expiry_date
                FROM document_metadata dm
                LEFT JOIN documents d ON d.paperless_doc_id = dm.paperless_doc_id
                WHERE dm.person_id = $1

@@ -111,60 +111,29 @@ def _validate_payment_split(
     return principal_component, amount_interest, amount_escrow
 
 
-async def _resolve_borrower_uuid(
+async def _resolve_borrower(
     *,
     pool: asyncpg.Pool,
-    borrower_uuid: str | None,
     borrower_person_id: int | None,
     borrower_entity_id: int | None,
-) -> str:
-    if borrower_uuid:
-        exists = await pool.fetchval("SELECT 1 FROM party_refs WHERE party_uuid = $1::uuid", borrower_uuid)
-        if not exists:
-            raise ValueError(
-                "primary_borrower_uuid not found in party_refs; create it with upsert_party_ref or pass a legacy person/entity id"
-            )
-        return borrower_uuid
+) -> tuple[int | None, int | None]:
+    """Validate and return (borrower_person_id, borrower_entity_id) — exactly one must be set."""
+    if borrower_person_id is not None and borrower_entity_id is not None:
+        raise ValueError("Provide exactly one of borrower_person_id or borrower_entity_id, not both")
 
     if borrower_person_id is not None:
-        person = await pool.fetchrow("SELECT id, legal_name FROM people WHERE id = $1", borrower_person_id)
-        if person is None:
-            raise ValueError(f"person_id {borrower_person_id} not found")
-        generated_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"finance-person:{borrower_person_id}"))
-        await pool.execute(
-            """INSERT INTO party_refs (party_uuid, party_type, legal_name, metadata)
-               VALUES ($1::uuid, 'person', $2, $3::jsonb)
-               ON CONFLICT (party_uuid) DO UPDATE SET
-                 legal_name = EXCLUDED.legal_name,
-                 metadata = party_refs.metadata || EXCLUDED.metadata,
-                 updated_at = now()""",
-            generated_uuid,
-            person["legal_name"],
-            json.dumps({"legacy_person_id": str(borrower_person_id)}),
-        )
-        return generated_uuid
+        exists = await pool.fetchval("SELECT 1 FROM people WHERE id = $1", borrower_person_id)
+        if not exists:
+            raise ValueError(f"borrower_person_id {borrower_person_id} not found in core.people")
+        return borrower_person_id, None
 
     if borrower_entity_id is not None:
-        entity = await pool.fetchrow("SELECT id, name FROM entities WHERE id = $1", borrower_entity_id)
-        if entity is None:
-            raise ValueError(f"entity_id {borrower_entity_id} not found")
-        generated_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"finance-entity:{borrower_entity_id}"))
-        await pool.execute(
-            """INSERT INTO party_refs (party_uuid, party_type, legal_name, metadata)
-               VALUES ($1::uuid, 'entity', $2, $3::jsonb)
-               ON CONFLICT (party_uuid) DO UPDATE SET
-                 legal_name = EXCLUDED.legal_name,
-                 metadata = party_refs.metadata || EXCLUDED.metadata,
-                 updated_at = now()""",
-            generated_uuid,
-            entity["name"],
-            json.dumps({"legacy_entity_id": str(borrower_entity_id)}),
-        )
-        return generated_uuid
+        exists = await pool.fetchval("SELECT 1 FROM entities WHERE id = $1", borrower_entity_id)
+        if not exists:
+            raise ValueError(f"borrower_entity_id {borrower_entity_id} not found in core.entities")
+        return None, borrower_entity_id
 
-    raise ValueError(
-        "Provide primary_borrower_uuid or one of primary_borrower_person_id / primary_borrower_entity_id"
-    )
+    raise ValueError("Provide borrower_person_id or borrower_entity_id")
 
 
 async def list_liability_types(pool: asyncpg.Pool) -> list[dict]:
@@ -176,78 +145,10 @@ async def list_liability_types(pool: asyncpg.Pool) -> list[dict]:
     return _rows_to_list(rows)
 
 
-async def upsert_party_ref(
-    pool: asyncpg.Pool,
-    *,
-    party_type: str,
-    legal_name: str,
-    party_uuid: str | None = None,
-    jurisdiction_code: str | None = None,
-    status: str | None = None,
-    metadata: dict | str | None = None,
-) -> dict:
-    normalized_type = (party_type or "").strip().lower()
-    if normalized_type not in {"person", "entity"}:
-        return _error_response("party_type must be 'person' or 'entity'", code="validation_error")
-    name = (legal_name or "").strip()
-    if not name:
-        return _error_response("legal_name is required", code="validation_error")
-    uuid_value = (party_uuid or "").strip()
-    if not uuid_value:
-        uuid_value = str(uuid.uuid4())
-    try:
-        uuid.UUID(uuid_value)
-    except ValueError:
-        return _error_response("party_uuid must be a valid UUID string", code="validation_error")
 
-    payload = _coerce_json_input(metadata)
-    row = await pool.fetchrow(
-        """INSERT INTO party_refs (
-               party_uuid, party_type, legal_name, jurisdiction_code, status, metadata
-           ) VALUES ($1::uuid,$2,$3,$4,$5,$6::jsonb)
-           ON CONFLICT (party_uuid) DO UPDATE SET
-               party_type = EXCLUDED.party_type,
-               legal_name = EXCLUDED.legal_name,
-               jurisdiction_code = EXCLUDED.jurisdiction_code,
-               status = EXCLUDED.status,
-               metadata = EXCLUDED.metadata,
-               updated_at = now()
-           RETURNING *""",
-        uuid_value,
-        normalized_type,
-        name,
-        jurisdiction_code,
-        status,
-        json.dumps(payload),
-    )
-    return _row_to_dict(row)
-
-
-async def list_party_refs(
-    pool: asyncpg.Pool,
-    *,
-    party_type: str | None = None,
-    limit: int = 200,
-) -> list[dict]:
-    cap = max(1, min(limit, 2000))
-    if party_type:
-        normalized = party_type.strip().lower()
-        rows = await pool.fetch(
-            """SELECT * FROM party_refs
-               WHERE party_type = $1
-               ORDER BY legal_name
-               LIMIT $2""",
-            normalized,
-            cap,
-        )
-    else:
-        rows = await pool.fetch(
-            """SELECT * FROM party_refs
-               ORDER BY legal_name
-               LIMIT $1""",
-            cap,
-        )
-    return _rows_to_list(rows)
+# upsert_party_ref and list_party_refs removed — party_refs table eliminated
+# in stewardos_db consolidation. Liabilities now use direct borrower_person_id
+# / borrower_entity_id FKs to core.people / core.entities.
 
 
 async def upsert_liability(
@@ -258,9 +159,8 @@ async def upsert_liability(
     outstanding_principal: float,
     currency: str,
     liability_id: int | None = None,
-    primary_borrower_uuid: str | None = None,
-    primary_borrower_person_id: int | None = None,
-    primary_borrower_entity_id: int | None = None,
+    borrower_person_id: int | None = None,
+    borrower_entity_id: int | None = None,
     jurisdiction_code: str | None = None,
     collateral_asset_id: int | None = None,
     lender_name: str | None = None,
@@ -324,49 +224,50 @@ async def upsert_liability(
     payload = _coerce_json_input(metadata)
     async with pool.acquire() as conn:
         async with conn.transaction():
-            borrower_uuid = await _resolve_borrower_uuid(
+            resolved_person_id, resolved_entity_id = await _resolve_borrower(
                 pool=conn,
-                borrower_uuid=primary_borrower_uuid,
-                borrower_person_id=primary_borrower_person_id,
-                borrower_entity_id=primary_borrower_entity_id,
+                borrower_person_id=borrower_person_id,
+                borrower_entity_id=borrower_entity_id,
             )
 
             if liability_id:
                 updated = await conn.fetchrow(
-                    """UPDATE liabilities
+                    """UPDATE finance.liabilities
                        SET name=$1,
                            liability_type_code=$2,
                            jurisdiction_id=$3,
-                           primary_borrower_uuid=$4::uuid,
-                           collateral_asset_id=$5,
-                           lender_name=$6,
-                           account_number_last4=$7,
-                           currency=$8,
-                           origination_date=$9,
-                           maturity_date=$10,
-                           original_principal=$11,
-                           outstanding_principal=$12,
-                           credit_limit=$13,
-                           rate_type=$14,
-                           rate_index=$15,
-                           interest_rate=$16,
-                           rate_spread_bps=$17,
-                           amortization_months=$18,
-                           remaining_term_months=$19,
-                           payment_frequency=$20,
-                           scheduled_payment=$21,
-                           escrow_payment=$22,
-                           next_payment_date=$23,
-                           prepayment_penalty=$24,
-                           status=$25,
-                           metadata=$26::jsonb,
+                           borrower_person_id=$4,
+                           borrower_entity_id=$5,
+                           collateral_asset_id=$6,
+                           lender_name=$7,
+                           account_number_last4=$8,
+                           currency=$9,
+                           origination_date=$10,
+                           maturity_date=$11,
+                           original_principal=$12,
+                           outstanding_principal=$13,
+                           credit_limit=$14,
+                           rate_type=$15,
+                           rate_index=$16,
+                           interest_rate=$17,
+                           rate_spread_bps=$18,
+                           amortization_months=$19,
+                           remaining_term_months=$20,
+                           payment_frequency=$21,
+                           scheduled_payment=$22,
+                           escrow_payment=$23,
+                           next_payment_date=$24,
+                           prepayment_penalty=$25,
+                           status=$26,
+                           metadata=$27::jsonb,
                            updated_at=now()
-                       WHERE id=$27
+                       WHERE id=$28
                        RETURNING id""",
                     clean_name,
                     liability_type_code,
                     jurisdiction_id,
-                    borrower_uuid,
+                    resolved_person_id,
+                    resolved_entity_id,
                     collateral_asset_id,
                     lender_name,
                     account_number_last4,
@@ -396,22 +297,23 @@ async def upsert_liability(
                 target_id = int(updated["id"])
             else:
                 created = await conn.fetchrow(
-                    """INSERT INTO liabilities (
-                           name, liability_type_code, jurisdiction_id, primary_borrower_uuid,
+                    """INSERT INTO finance.liabilities (
+                           name, liability_type_code, jurisdiction_id, borrower_person_id, borrower_entity_id,
                            collateral_asset_id, lender_name, account_number_last4, currency,
                            origination_date, maturity_date, original_principal, outstanding_principal,
                            credit_limit, rate_type, rate_index, interest_rate, rate_spread_bps,
                            amortization_months, remaining_term_months, payment_frequency, scheduled_payment,
                            escrow_payment, next_payment_date, prepayment_penalty, status, metadata
                        ) VALUES (
-                           $1,$2,$3,$4::uuid,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
-                           $19,$20,$21,$22,$23,$24,$25,$26::jsonb
+                           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
+                           $20,$21,$22,$23,$24,$25,$26,$27::jsonb
                        )
                        RETURNING id""",
                     clean_name,
                     liability_type_code,
                     jurisdiction_id,
-                    borrower_uuid,
+                    resolved_person_id,
+                    resolved_entity_id,
                     collateral_asset_id,
                     lender_name,
                     account_number_last4,
@@ -439,10 +341,12 @@ async def upsert_liability(
 
             row = await conn.fetchrow(
                 """SELECT l.*, j.code AS jurisdiction_code, j.name AS jurisdiction_name,
-                          p.legal_name AS borrower_name, p.party_type AS borrower_type
-                   FROM liabilities l
+                          COALESCE(bp.legal_name, be.name) AS borrower_name,
+                          CASE WHEN l.borrower_person_id IS NOT NULL THEN 'person' ELSE 'entity' END AS borrower_type
+                   FROM finance.liabilities l
                    LEFT JOIN jurisdictions j ON l.jurisdiction_id = j.id
-                   LEFT JOIN party_refs p ON l.primary_borrower_uuid = p.party_uuid
+                   LEFT JOIN people bp ON l.borrower_person_id = bp.id
+                   LEFT JOIN entities be ON l.borrower_entity_id = be.id
                    WHERE l.id = $1""",
                 target_id,
             )
@@ -453,7 +357,8 @@ async def list_liabilities(
     pool: asyncpg.Pool,
     *,
     status: str | None = None,
-    primary_borrower_uuid: str | None = None,
+    borrower_person_id: int | None = None,
+    borrower_entity_id: int | None = None,
     collateral_asset_id: int | None = None,
     jurisdiction_code: str | None = None,
     limit: int = 500,
@@ -465,9 +370,12 @@ async def list_liabilities(
     if status:
         params.append(status)
         clauses.append(f"l.status = ${len(params)}")
-    if primary_borrower_uuid:
-        params.append(primary_borrower_uuid)
-        clauses.append(f"l.primary_borrower_uuid = ${len(params)}::uuid")
+    if borrower_person_id is not None:
+        params.append(borrower_person_id)
+        clauses.append(f"l.borrower_person_id = ${len(params)}")
+    if borrower_entity_id is not None:
+        params.append(borrower_entity_id)
+        clauses.append(f"l.borrower_entity_id = ${len(params)}")
     if collateral_asset_id is not None:
         params.append(collateral_asset_id)
         clauses.append(f"l.collateral_asset_id = ${len(params)}")
@@ -482,10 +390,12 @@ async def list_liabilities(
     params.append(cap)
     rows = await pool.fetch(
         f"""SELECT l.*, j.code AS jurisdiction_code, j.name AS jurisdiction_name,
-                   p.legal_name AS borrower_name, p.party_type AS borrower_type
-            FROM liabilities l
+                   COALESCE(bp.legal_name, be.name) AS borrower_name,
+                   CASE WHEN l.borrower_person_id IS NOT NULL THEN 'person' ELSE 'entity' END AS borrower_type
+            FROM finance.liabilities l
             LEFT JOIN jurisdictions j ON l.jurisdiction_id = j.id
-            LEFT JOIN party_refs p ON l.primary_borrower_uuid = p.party_uuid
+            LEFT JOIN people bp ON l.borrower_person_id = bp.id
+            LEFT JOIN entities be ON l.borrower_entity_id = be.id
             {where_sql}
             ORDER BY l.updated_at DESC, l.id DESC
             LIMIT ${len(params)}""",
@@ -965,9 +875,12 @@ async def get_refi_opportunities(
     include_hold: bool = False,
 ) -> dict:
     liabilities = await pool.fetch(
-        """SELECT l.*, p.legal_name AS borrower_name, j.code AS jurisdiction_code
-           FROM liabilities l
-           LEFT JOIN party_refs p ON l.primary_borrower_uuid = p.party_uuid
+        """SELECT l.*,
+                  COALESCE(bp.legal_name, be.name) AS borrower_name,
+                  j.code AS jurisdiction_code
+           FROM finance.liabilities l
+           LEFT JOIN people bp ON l.borrower_person_id = bp.id
+           LEFT JOIN entities be ON l.borrower_entity_id = be.id
            LEFT JOIN jurisdictions j ON l.jurisdiction_id = j.id
            WHERE l.status = 'active'
            ORDER BY l.id"""
@@ -1027,7 +940,8 @@ async def get_liability_summary(
     *,
     status: str = "active",
     jurisdiction: str | None = None,
-    borrower_uuid: str | None = None,
+    borrower_person_id: int | None = None,
+    borrower_entity_id: int | None = None,
 ) -> dict:
     clauses: list[str] = ["l.status = $1"]
     params: list = [status]
@@ -1035,16 +949,22 @@ async def get_liability_summary(
     if jurisdiction:
         params.append(jurisdiction)
         clauses.append(f"j.code = ${len(params)}")
-    if borrower_uuid:
-        params.append(borrower_uuid)
-        clauses.append(f"l.primary_borrower_uuid = ${len(params)}::uuid")
+    if borrower_person_id is not None:
+        params.append(borrower_person_id)
+        clauses.append(f"l.borrower_person_id = ${len(params)}")
+    if borrower_entity_id is not None:
+        params.append(borrower_entity_id)
+        clauses.append(f"l.borrower_entity_id = ${len(params)}")
 
     where_sql = " AND ".join(clauses)
     rows = await pool.fetch(
-        f"""SELECT l.*, j.code AS jurisdiction_code, p.legal_name AS borrower_name
-            FROM liabilities l
+        f"""SELECT l.*,
+                   j.code AS jurisdiction_code,
+                   COALESCE(bp.legal_name, be.name) AS borrower_name
+            FROM finance.liabilities l
             LEFT JOIN jurisdictions j ON l.jurisdiction_id = j.id
-            LEFT JOIN party_refs p ON l.primary_borrower_uuid = p.party_uuid
+            LEFT JOIN people bp ON l.borrower_person_id = bp.id
+            LEFT JOIN entities be ON l.borrower_entity_id = be.id
             WHERE {where_sql}
             ORDER BY l.outstanding_principal DESC NULLS LAST""",
         *params,
@@ -1079,7 +999,8 @@ async def get_liability_summary(
     return {
         "status_filter": status,
         "jurisdiction_filter": jurisdiction,
-        "borrower_filter": borrower_uuid,
+        "borrower_person_id_filter": borrower_person_id,
+        "borrower_entity_id_filter": borrower_entity_id,
         "liability_count": len(rows),
         "weighted_avg_interest_rate": weighted_avg_interest,
         "totals_by_currency": list(by_currency.values()),

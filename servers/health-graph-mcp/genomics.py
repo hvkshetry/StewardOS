@@ -27,7 +27,7 @@ def register_genomics_tools(mcp, get_pool, ensure_initialized):
 
     @_tool
     async def ingest_genome_artifact(
-        subject_id: int,
+        person_id: int,
         file_path: str,
         sample_name: str = "primary_dna",
         callset_name: str = "23andme_raw",
@@ -68,12 +68,12 @@ def register_genomics_tools(mcp, get_pool, ensure_initialized):
                 assert artifact is not None
 
                 sample = await conn.fetchrow(
-                    """INSERT INTO samples (subject_id, sample_name, sample_type)
+                    """INSERT INTO samples (person_id, sample_name, sample_type)
                        VALUES ($1, $2, 'dna')
-                       ON CONFLICT (subject_id, sample_name)
+                       ON CONFLICT (person_id, sample_name)
                        DO UPDATE SET sample_type = EXCLUDED.sample_type
                        RETURNING *""",
-                    subject_id,
+                    person_id,
                     sample_name,
                 )
                 assert sample is not None
@@ -188,32 +188,32 @@ def register_genomics_tools(mcp, get_pool, ensure_initialized):
                 )
 
     @_tool
-    async def list_callsets(subject_id: int | None = None) -> list[dict]:
+    async def list_callsets(person_id: int | None = None) -> list[dict]:
         """List callsets, optionally filtered by subject."""
         await ensure_initialized()
         pool = await get_pool()
         async with pool.acquire() as conn:
-            if subject_id is None:
+            if person_id is None:
                 rows = await conn.fetch(
-                    """SELECT c.*, s.subject_id
+                    """SELECT c.*, s.person_id
                        FROM callsets c
                        JOIN samples s ON s.id = c.sample_id
                        ORDER BY c.id DESC"""
                 )
             else:
                 rows = await conn.fetch(
-                    """SELECT c.*, s.subject_id
+                    """SELECT c.*, s.person_id
                        FROM callsets c
                        JOIN samples s ON s.id = c.sample_id
-                       WHERE s.subject_id = $1
+                       WHERE s.person_id = $1
                        ORDER BY c.id DESC""",
-                    subject_id,
+                    person_id,
                 )
         return _rows_to_dicts(rows)
 
     @_tool
     async def query_genotype_calls(
-        subject_id: int,
+        person_id: int,
         rsid: str = "",
         chromosome: str = "",
         position: int = 0,
@@ -223,8 +223,8 @@ def register_genomics_tools(mcp, get_pool, ensure_initialized):
         await ensure_initialized()
         pool = await get_pool()
 
-        clauses = ["s.subject_id = $1"]
-        params: list[Any] = [subject_id]
+        clauses = ["s.person_id = $1"]
+        params: list[Any] = [person_id]
         idx = 2
 
         if rsid:
@@ -242,7 +242,7 @@ def register_genomics_tools(mcp, get_pool, ensure_initialized):
 
         params.append(max(1, min(limit, 1000)))
         query = (
-            "SELECT gc.*, c.callset_name, s.subject_id "
+            "SELECT gc.*, c.callset_name, s.person_id "
             "FROM genotype_calls gc "
             "JOIN callsets c ON c.id = gc.callset_id "
             "JOIN samples s ON s.id = c.sample_id "

@@ -42,14 +42,14 @@ cwd = "/path/to/stewardos/servers/memos-mcp"
 env = { MEMOS_URL = "http://localhost:5230", MEMOS_API_TOKEN = "${MEMOS_API_TOKEN}" }
 
 [mcp_servers.actual-budget]
-command = "node"
-args = ["/path/to/stewardos/servers/actual-mcp/build/index.js"]
+command = "/path/to/stewardos/servers/actual-mcp/scripts/start_with_env.sh"
+args = []
 cwd = "/path/to/stewardos/servers/actual-mcp"
 startup_timeout_sec = 180
-env = { ACTUAL_SERVER_URL = "http://localhost:5006", ACTUAL_PASSWORD = "${ACTUAL_PASSWORD}", ACTUAL_BUDGET_SYNC_ID = "${ACTUAL_BUDGET_SYNC_ID}", ACTUAL_DATA_DIR = "/tmp/actual-mcp-data" }
 
 [mcp_servers.homebox]
 command = "uv"
 args = ["run", "python", "server.py"]
 cwd = "/path/to/stewardos/servers/homebox-mcp"
+startup_timeout_sec = 60
 env = { HOMEBOX_URL = "http://localhost:3100", HOMEBOX_USERNAME = "${HOMEBOX_USERNAME}", HOMEBOX_PASSWORD = "${HOMEBOX_PASSWORD}" }

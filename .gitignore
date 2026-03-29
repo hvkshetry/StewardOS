@@ -67,6 +67,14 @@ agent-configs/.env.google-oauth
 
 # Persona runtime outputs
 agent-configs/**/output/
+agent-configs/**/auth.json
+agent-configs/**/config.toml
+agent-configs/**/models_cache.json
+agent-configs/**/version.json
+agent-configs/**/.personality_migration
+agent-configs/**/log/
+agent-configs/**/skills/
+agent-configs/**/.actual-mcp-data/
 
 # Live env/config state
 agents/**/.env
@@ -92,3 +100,11 @@ servers/mealie-mcp/
 servers/oura-mcp/
 servers/paperless-mcp/
 servers/investing-workspace/sec-edgar/
+servers/plane-fork/
+servers/us-legal-mcp/
+
+# Local one-off artifact from dependency probing
+servers/household-tax-mcp/=6.4.0
+
+# Nested repos (separate git remotes)
+stewardos.example.com/

@@ -29,7 +29,7 @@ from genome_knowledge import register_genome_knowledge_tools  # noqa: E402
 from status import register_status_tools  # noqa: E402
 
 DATABASE_URL = os.environ.get(
-    "DATABASE_URL", "postgresql://health:changeme@localhost:5434/health_graph"
+    "DATABASE_URL", "postgresql://health:changeme@localhost:5434/stewardos_db"
 )
 AUTO_APPLY_MIGRATIONS = os.environ.get("HEALTH_GRAPH_AUTO_APPLY_MIGRATIONS", "").strip().lower() in {
     "1",

@@ -26,6 +26,13 @@ args = ["/path/to/stewardos/servers/investing-workspace/market-intel-direct/serv
 startup_timeout_sec = 60
 env = { FRED_API_KEY = "${FRED_API_KEY}" }
 
+[mcp_servers.alpha-research-backtest]
+command = "/path/to/stewardos/servers/investing-workspace/.venv/bin/python"
+args = ["/path/to/stewardos/agent-configs/investment-officer/backtest_alpha_mcp/server.py"]
+cwd = "/path/to/stewardos/agent-configs/investment-officer"
+startup_timeout_sec = 60
+env = { FRED_API_KEY = "${FRED_API_KEY}" }
+
 [mcp_servers.sec-edgar]
 command = "/path/to/stewardos/servers/investing-workspace/sec-edgar/.venv/bin/python"
 args = ["/path/to/stewardos/servers/investing-workspace/sec-edgar/consolidated_server.py"]

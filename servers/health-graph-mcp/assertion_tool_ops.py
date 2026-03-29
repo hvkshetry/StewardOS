@@ -34,7 +34,7 @@ async def ingest_clinical_assertions_tool(
     ensure_initialized: EnsureInitialized,
     source_name: str,
     assertions_json: str | dict | list,
-    subject_id: int = 0,
+    person_id: int = 0,
 ) -> dict:
     await ensure_initialized()
 
@@ -43,9 +43,9 @@ async def ingest_clinical_assertions_tool(
     except ValueError as exc:
         return _error_response(str(exc), code="validation_error")
 
-    if subject_id <= 0:
+    if person_id <= 0:
         return _error_response(
-            "subject_id is required to prevent ungrounded clinical assertion ingestion",
+            "person_id is required to prevent ungrounded clinical assertion ingestion",
             code="validation_error",
         )
 
@@ -68,11 +68,11 @@ async def ingest_clinical_assertions_tool(
             conn,
             source_name=source_name,
             run_type="clinical_assertion_ingest",
-            metadata={"subject_id": subject_id},
+            metadata={"person_id": person_id},
         )
         try:
             async with conn.transaction():
-                await ensure_subject_has_genome_data(conn, subject_id)
+                await ensure_subject_has_genome_data(conn, person_id)
 
                 for item in assertions:
                     if not isinstance(item, dict):
@@ -91,7 +91,7 @@ async def ingest_clinical_assertions_tool(
 
                     variant_id = await resolve_subject_variant_id(
                         conn,
-                        subject_id=subject_id,
+                        person_id=person_id,
                         source_name=source_name,
                         rsid=rsid,
                         chrom=chrom,
@@ -227,7 +227,7 @@ async def ingest_trait_associations_tool(
     ensure_initialized: EnsureInitialized,
     source_name: str,
     associations_json: str | dict | list,
-    subject_id: int = 0,
+    person_id: int = 0,
 ) -> dict:
     await ensure_initialized()
 
@@ -236,9 +236,9 @@ async def ingest_trait_associations_tool(
     except ValueError as exc:
         return _error_response(str(exc), code="validation_error")
 
-    if subject_id <= 0:
+    if person_id <= 0:
         return _error_response(
-            "subject_id is required to prevent ungrounded trait association ingestion",
+            "person_id is required to prevent ungrounded trait association ingestion",
             code="validation_error",
         )
 
@@ -261,11 +261,11 @@ async def ingest_trait_associations_tool(
             conn,
             source_name=source_name,
             run_type="trait_association_ingest",
-            metadata={"subject_id": subject_id},
+            metadata={"person_id": person_id},
         )
         try:
             async with conn.transaction():
-                await ensure_subject_has_genome_data(conn, subject_id)
+                await ensure_subject_has_genome_data(conn, person_id)
 
                 for item in associations:
                     if not isinstance(item, dict):
@@ -284,7 +284,7 @@ async def ingest_trait_associations_tool(
 
                     variant_id = await resolve_subject_variant_id(
                         conn,
-                        subject_id=subject_id,
+                        person_id=person_id,
                         source_name=source_name,
                         rsid=rsid,
                         chrom=chrom,
@@ -364,7 +364,7 @@ async def get_polygenic_context_tool(
     *,
     get_pool: GetPool,
     ensure_initialized: EnsureInitialized,
-    subject_id: int,
+    person_id: int,
     limit: int = 100,
 ) -> dict:
     await ensure_initialized()
@@ -378,21 +378,21 @@ async def get_polygenic_context_tool(
                    FROM genotype_calls gc
                    JOIN callsets c ON c.id = gc.callset_id
                    JOIN samples s ON s.id = c.sample_id
-                   WHERE s.subject_id = $1
+                   WHERE s.person_id = $1
                      AND gc.variant_id = ta.variant_id
                )
                ORDER BY ta.id DESC
                LIMIT $2""",
-            subject_id,
+            person_id,
             max(1, min(limit, 1000)),
         )
         evaluations = await conn.fetch(
             """SELECT pe.*, ps.score_id, ps.trait_name, ps.ancestry
                FROM polygenic_evaluations pe
                JOIN polygenic_scores ps ON ps.id = pe.polygenic_score_id
-               WHERE pe.subject_id = $1
+               WHERE pe.person_id = $1
                ORDER BY pe.id DESC""",
-            subject_id,
+            person_id,
         )
 
         out_assoc = []
@@ -407,7 +407,7 @@ async def get_polygenic_context_tool(
             out_assoc.append(item)
 
     return {
-        "subject_id": subject_id,
+        "person_id": person_id,
         "trait_associations": out_assoc,
         "polygenic_evaluations": _rows_to_dicts(evaluations),
     }
@@ -546,7 +546,7 @@ async def get_wellness_recommendations_tool(
     *,
     get_pool: GetPool,
     ensure_initialized: EnsureInitialized,
-    subject_id: int,
+    person_id: int,
 ) -> dict:
     await ensure_initialized()
     pool = await get_pool()
@@ -554,10 +554,10 @@ async def get_wellness_recommendations_tool(
     async with pool.acquire() as conn:
         pgx_rows = await conn.fetch(
             """SELECT * FROM pgx_recommendations
-               WHERE subject_id=$1
+               WHERE person_id=$1
                ORDER BY id DESC
                LIMIT 50""",
-            subject_id,
+            person_id,
         )
         assoc_rows = await conn.fetch(
             """SELECT ta.*
@@ -567,19 +567,19 @@ async def get_wellness_recommendations_tool(
                    FROM genotype_calls gc
                    JOIN callsets c ON c.id = gc.callset_id
                    JOIN samples s ON s.id = c.sample_id
-                   WHERE s.subject_id = $1
+                   WHERE s.person_id = $1
                      AND gc.variant_id = ta.variant_id
                )
                ORDER BY ta.id DESC
                LIMIT 100""",
-            subject_id,
+            person_id,
         )
         recent_labs = await conn.fetch(
             """SELECT * FROM observations
-               WHERE subject_id=$1
+               WHERE person_id=$1
                ORDER BY effective_at DESC NULLS LAST, id DESC
                LIMIT 20""",
-            subject_id,
+            person_id,
         )
 
         recommendations = []
@@ -606,7 +606,7 @@ async def get_wellness_recommendations_tool(
                 research_notes.append(item)
 
     return {
-        "subject_id": subject_id,
+        "person_id": person_id,
         "actionable_recommendations": recommendations,
         "research_mode_notes": research_notes[:20],
         "recent_labs": _rows_to_dicts(recent_labs),

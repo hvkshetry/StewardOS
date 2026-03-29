@@ -27,6 +27,7 @@ Research Analyst delegation policy:
 | Server | Purpose |
 |--------|---------|
 | market-intel-direct | Direct market data (yfinance), FRED macro series, GDELT news |
+| alpha-research-backtest | Isolated free-data backtest lane for taped historical tool responses, dated macro/filing retrieval, and long-only equity cohort scoring |
 | portfolio-analytics | Scoped portfolio state/risk/drift/TLH using Ghostfolio source data |
 | policy-events | Congressional bills, regulatory filings, policy impact |
 | sec-edgar | SEC company disclosures (10-K/10-Q/8-K), insider forms, XBRL concepts |
@@ -72,6 +73,18 @@ Email routing rules:
 | dd-checklist | Due diligence checklist and red-flag tracking for private deals |
 | family-email-formatting | Shared family-office HTML email formatting with `brief` and `reply` modes plus persona-specific visual variants |
 
+### Local Backtest-Only Skills
+
+These stay outside the live PM path and must use `alpha-research-backtest` only.
+
+| Skill | Purpose | Path |
+|-------|---------|------|
+| alpha-backtest | Orchestrate taped prompt-bundle backtests and cohort scoring | `$STEWARDOS_ROOT/agent-configs/investment-officer/skills/alpha-backtest/SKILL.md` |
+| candidate-screen | Build the dated shortlist from a fixed large-cap universe | `$STEWARDOS_ROOT/agent-configs/investment-officer/skills/candidate-screen/SKILL.md` |
+| regime-card-pit | Build a dated macro/regime card from the isolated research surface | `$STEWARDOS_ROOT/agent-configs/investment-officer/skills/regime-card-pit/SKILL.md` |
+| filing-delta | Summarize what changed in the dated filing set | `$STEWARDOS_ROOT/agent-configs/investment-officer/skills/filing-delta/SKILL.md` |
+| thesis-scorecard | Convert evidence into a fixed five-factor thesis packet | `$STEWARDOS_ROOT/agent-configs/investment-officer/skills/thesis-scorecard/SKILL.md` |
+
 ## Commands
 
 | Command | What It Does |
@@ -80,6 +93,7 @@ Email routing rules:
 | `/client-report` | Client-ready quarterly/annual portfolio report |
 | `/investment-proposal` | Proposed allocation, trade plan, and risk/tax checks |
 | `/illiquid-valuation` | Valuation range for private or illiquid holdings |
+| `/alpha-backtest` | Backtest-only alpha sleeve evaluation using taped historical tool responses |
 
 ## Analysis Agents
 
@@ -101,6 +115,7 @@ Email routing rules:
 6. **No Fabrication** — if a tool returns no data, report the gap — never estimate
 7. **Tax Overlay** — use the read-only exact `household-tax` tools only when the case is inside the supported 2026 `US` + `MA` scope; all other household tax and budget operations belong to the household comptroller
 8. **Email boundary** — outbound investment correspondence must use `from_email=steward.agent+io@example.com` via `google-workspace-agent-rw`
+9. **Backtest isolation** — use `alpha-research-backtest` plus the local backtest-only prompts/skills for research-sleeve experiments; never mix live portfolio state into those runs
 
 ## Automated Reply Protocol (Family Office Mail Worker)
 
@@ -163,6 +178,21 @@ Practitioner heuristic overlay adds a second risk lens alongside ES:
 GDELT rejects queries with keywords shorter than 3 characters.
 - BAD: "AI", "ML", "IoT" — use full terms: "artificial intelligence", "machine learning"
 - OK: Geographic codes (US, UK, EU, UN)
+- Historical article search for the research sleeve belongs to `alpha-research-backtest.search_event_archive`; do not treat live `search_market_news` as a reproducible archive.
+
+### Backtest Research Lane
+
+Use these overlays only for the isolated alpha research sleeve:
+
+- Alpha PM overlay: `$STEWARDOS_ROOT/agent-configs/investment-officer/prompts/alpha-pm-backtest.md`
+- Research Analyst overlay: `$STEWARDOS_ROOT/agent-configs/investment-officer/prompts/research-analyst-backtest.md`
+
+Backtest-lane rules:
+
+- keep the household ES gate unchanged
+- optimize only long-only US equity cohorts held at least 366 days
+- leave options out of the scored optimizer
+- tape every historical tool response before scoring a run
 
 ### SEC Filing Context (sec-edgar)
 Use consolidated tools for disclosure context and insider activity:

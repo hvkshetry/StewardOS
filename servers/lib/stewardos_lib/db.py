@@ -15,12 +15,21 @@ async def create_server_pool(
     min_size: int = 1,
     max_size: int = 5,
 ) -> asyncpg.Pool:
-    """Create a connection pool with standardized settings."""
+    """Create a connection pool with standardized settings.
+
+    For domain schemas (finance, estate, health), the search_path
+    includes the core schema so unqualified references to shared
+    tables (people, entities, assets, etc.) resolve correctly.
+    """
+    if schema in ("finance", "estate", "health"):
+        search_path = f"{schema},core,public"
+    else:
+        search_path = f"{schema},public"
     return await asyncpg.create_pool(
         database_url,
         min_size=min_size,
         max_size=max_size,
-        server_settings={"search_path": f"{schema},public"},
+        server_settings={"search_path": search_path},
     )
 
 

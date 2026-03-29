@@ -63,7 +63,7 @@ async def _fetch_updated_work_items(
         f"{settings.plane_base_url}/api/v1/workspaces/{workspace_slug}"
         f"/projects/{project_id}/work-items/"
     )
-    params = {"updated_at__gt": updated_after}
+    params = {"updated_at__gt": updated_after, "expand": "coordination"}
     resp = await client.get(url, headers=_plane_headers(), params=params)
     resp.raise_for_status()
     data = resp.json()
@@ -81,7 +81,7 @@ async def _fetch_child_work_items(
         f"{settings.plane_base_url}/api/v1/workspaces/{workspace_slug}"
         f"/projects/{project_id}/work-items/"
     )
-    params = {"parent": parent_id}
+    params = {"parent": parent_id, "expand": "coordination"}
     resp = await client.get(url, headers=_plane_headers(), params=params)
     resp.raise_for_status()
     data = resp.json()
@@ -279,13 +279,9 @@ async def _resume_lead_session(
         child_id = str(child.get("id", ""))
         child_title = child.get("name", "") or child.get("title", "")
         child_desc = child.get("description_stripped", "") or ""
-        # Extract target_alias from labels
-        child_alias = "unknown"
-        for label in child.get("labels", []):
-            label_name = label if isinstance(label, str) else (label.get("name", "") if isinstance(label, dict) else "")
-            if label_name.startswith("target_alias:"):
-                child_alias = label_name.split(":", 1)[1]
-                break
+        child_coordination = child.get("coordination") or {}
+        child_alias = (child_coordination.get("route_to") or "").strip() or "unrouted"
+        child_actor = f"+{child_alias}" if child_alias in settings.alias_persona_map else child_alias
         child_state_id = str(child.get("state", ""))
         child_state = states.get(child_state_id, {}).get("name", "done")
         # Fetch specialist result from the latest comment on this work item
@@ -297,7 +293,7 @@ async def _resume_lead_session(
         # Use comment (specialist result) if available, otherwise fall back to description
         result_text = specialist_output or child_desc
         results_lines.append(
-            f"### +{child_alias}: {child_title}\n"
+            f"### {child_actor}: {child_title}\n"
             f"State: {child_state}\n"
             f"{result_text[:10000]}"
         )

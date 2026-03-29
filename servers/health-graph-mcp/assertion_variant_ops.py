@@ -8,21 +8,21 @@ from helpers import (
 )
 
 
-async def ensure_subject_has_genome_data(conn, subject_id: int) -> None:
-    if not await _subject_has_genome_data(conn, subject_id):
-        raise ValueError(f"subject_id {subject_id} has no genotype data")
+async def ensure_subject_has_genome_data(conn, person_id: int) -> None:
+    if not await _subject_has_genome_data(conn, person_id):
+        raise ValueError(f"person_id {person_id} has no genotype data")
 
 
 async def resolve_subject_variant_id(
     conn,
     *,
-    subject_id: int,
+    person_id: int,
     source_name: str,
     rsid: str | None,
     chrom: str | None,
     pos_int: int | None,
 ) -> int | None:
-    if not await _subject_has_variant_match(conn, subject_id, rsid, chrom, pos_int):
+    if not await _subject_has_variant_match(conn, person_id, rsid, chrom, pos_int):
         return None
 
     if chrom and pos_int is not None:
@@ -50,10 +50,10 @@ async def resolve_subject_variant_id(
                JOIN genotype_calls gc ON gc.variant_id = vc.id
                JOIN callsets c ON c.id = gc.callset_id
                JOIN samples s ON s.id = c.sample_id
-               WHERE s.subject_id = $1 AND gc.rsid = $2
+               WHERE s.person_id = $1 AND gc.rsid = $2
                ORDER BY vc.id DESC
                LIMIT 1""",
-            subject_id,
+            person_id,
             rsid,
         )
         if variant is not None:

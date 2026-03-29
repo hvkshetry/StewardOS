@@ -158,7 +158,7 @@ All workspaces named by **domain**, not persona. Future persona splits stay with
 ### 2B. Cross-Domain Collaboration Rules
 
 - Lead agent always owns the root case and all child tasks in its **home workspace/project** (Plane requires parent/child to be in the same project)
-- Cross-domain work: lead agent creates child **tasks** in its own project with `target_alias:{specialist}` labels — the worker routes execution to the specialist persona
+- Cross-domain work: lead agent creates child **tasks** in its own project and routes them through Plane coordination state (`route_to`, `coordination_status`, `reply_identity`) rather than `target_alias:*` labels
 - Specialist executes using its own workspace's tools and skills, but the Plane work item tracking stays in the lead's project
 - Specialist results are posted as Plane comments on the child work item; the polling loop fetches comments for the lead's resume prompt
 - No agent creates cases outside its home workspace without human approval

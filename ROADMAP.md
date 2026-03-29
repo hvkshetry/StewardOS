@@ -24,6 +24,8 @@
 - Document lifecycle: Paperless-ngx integration with estate entity linking, review policies, version chain tracking
 - Cross-system identity graph: queryable work-item/external-object graph (WorkItemNode, ExternalObject, Edge tables) with auto-population on Case creation and edge resolution
 - Lightweight request tier: tracked-but-lightweight requests with create/resolve/promote lifecycle, graph linkage, and auto-tracking on direct replies
+- Database consolidation: 6 separate PostgreSQL databases merged into single `stewardos_db` with `core`, `finance`, `estate`, `health`, `tax`, `family_edu`, `orchestration` schemas. Real cross-schema FKs replace bridge-key workarounds. `party_refs` eliminated in favor of direct borrower FKs on liabilities. Health `subjects` replaced by `core.people` + `health.subject_profiles`. Valuation model switched to `is_current` boolean selector. Old databases dropped after verified migration.
+- Ontology layer: cross-domain `ontology-mcp` server with FK-based link catalog, decision traces, lifecycle extraction, per-server action catalogs, and `find_related`/`get_entity_context` tools for multi-hop graph traversal across schemas
 
 ## In Progress
 

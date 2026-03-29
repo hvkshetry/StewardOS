@@ -51,7 +51,7 @@ def register_cross_cutting_tools(mcp, get_pool):
         """Get net worth roll-up including liabilities.
 
         Args:
-            person_id: Optional legacy person id filter (uses party_refs.metadata.legacy_person_id mapping).
+            person_id: Filter to assets owned by this person (direct + through entities).
             jurisdiction: Optional jurisdiction code filter.
             ownership_basis: Ownership basis for the roll-up. Only ``legal_title`` is
                 currently supported; this makes current title-based semantics explicit.
@@ -87,7 +87,7 @@ def register_cross_cutting_tools(mcp, get_pool):
                                   cvo.value_currency AS currency,
                                   cvo.value_amount AS current_value
                            FROM assets a
-                           LEFT JOIN valuation_observations cvo ON cvo.id = a.current_valuation_observation_id
+                           LEFT JOIN finance.valuation_observations cvo ON cvo.asset_id = a.id AND cvo.is_current = true
                            LEFT JOIN jurisdictions j ON a.jurisdiction_id = j.id
                        )
                        SELECT av.jurisdiction AS jurisdiction,
@@ -120,13 +120,11 @@ def register_cross_cutting_tools(mcp, get_pool):
                               l.currency AS currency,
                               SUM(l.outstanding_principal)::numeric AS direct_liability_value,
                               0::numeric AS lookthrough_liability_value
-                       FROM liabilities l
-                       JOIN party_refs pr ON pr.party_uuid = l.primary_borrower_uuid
+                       FROM finance.liabilities l
                        LEFT JOIN jurisdictions j ON l.jurisdiction_id = j.id
                        WHERE l.status = 'active'
                          AND l.outstanding_principal IS NOT NULL
-                         AND pr.party_type = 'person'
-                         AND COALESCE(pr.metadata->>'legacy_person_id', '') = $1::text
+                         AND l.borrower_person_id = $1
                          {liability_jurisdiction_clause}
                        GROUP BY j.code, l.currency
                        UNION ALL
@@ -134,13 +132,12 @@ def register_cross_cutting_tools(mcp, get_pool):
                               l.currency AS currency,
                               0::numeric AS direct_liability_value,
                               SUM(l.outstanding_principal * pe.effective_pct / 100.0)::numeric AS lookthrough_liability_value
-                       FROM liabilities l
-                       JOIN party_refs pr ON pr.party_uuid = l.primary_borrower_uuid
-                       JOIN person_entities pe ON COALESCE(pr.metadata->>'legacy_entity_id', '') = pe.entity_id::text
+                       FROM finance.liabilities l
+                       JOIN person_entities pe ON l.borrower_entity_id = pe.entity_id
                        LEFT JOIN jurisdictions j ON l.jurisdiction_id = j.id
                        WHERE l.status = 'active'
                          AND l.outstanding_principal IS NOT NULL
-                         AND pr.party_type = 'entity'
+                         AND l.borrower_entity_id IS NOT NULL
                          {liability_jurisdiction_clause}
                        GROUP BY j.code, l.currency""",
                 *person_params,
@@ -160,7 +157,7 @@ def register_cross_cutting_tools(mcp, get_pool):
                                   cvo.value_currency AS currency,
                                   cvo.value_amount AS current_value
                            FROM assets a
-                           LEFT JOIN valuation_observations cvo ON cvo.id = a.current_valuation_observation_id
+                           LEFT JOIN finance.valuation_observations cvo ON cvo.asset_id = a.id AND cvo.is_current = true
                            LEFT JOIN jurisdictions j ON a.jurisdiction_id = j.id
                        )
                     SELECT av.jurisdiction AS jurisdiction,
@@ -175,7 +172,7 @@ def register_cross_cutting_tools(mcp, get_pool):
                 f"""SELECT j.code AS jurisdiction,
                            l.currency AS currency,
                            SUM(l.outstanding_principal)::numeric AS liability_value
-                    FROM liabilities l
+                    FROM finance.liabilities l
                     LEFT JOIN jurisdictions j ON l.jurisdiction_id = j.id
                     {where_liabs}
                     GROUP BY j.code, l.currency""",

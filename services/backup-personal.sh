@@ -22,7 +22,7 @@ mkdir -p "$BACKUP_DIR/volumes"
 
 # ─── 1. PostgreSQL database dumps ───
 log "Dumping PostgreSQL databases..."
-for db in ghostfolio paperless wger estate_planning finance_graph household_tax family_edu health_graph plane postgres; do
+for db in stewardos_db ghostfolio paperless wger plane postgres; do
     DUMP_FILE="$BACKUP_DIR/postgres/${db}_${DATE}.sql"
     if docker exec personal-db pg_dump -U postgres -d "$db" > "$DUMP_FILE" 2>>"$LOG_FILE"; then
         gzip "$DUMP_FILE"

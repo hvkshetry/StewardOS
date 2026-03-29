@@ -486,7 +486,10 @@ services:
       - personal-net
 
   plane-migrator:
-    image: makeplane/plane-backend:stable
+    build:
+      context: ../servers/plane-fork/apps/api
+      dockerfile: Dockerfile.api
+    image: stewardos/plane-backend:${PLANE_BACKEND_RELEASE:-v1.2.3-api-v1}
     container_name: plane-migrator
     restart: "no"
     command: ./bin/docker-entrypoint-migrator.sh
@@ -515,13 +518,24 @@ services:
       CORS_ALLOWED_ORIGINS: https://pm.stewardos.example.com
       API_KEY_RATE_LIMIT: "300/minute"
       GUNICORN_WORKERS: "1"
+      ENABLE_SMTP: ${ENABLE_SMTP:-0}
+      EMAIL_HOST: ${EMAIL_HOST:-}
+      EMAIL_HOST_USER: ${EMAIL_HOST_USER:-}
+      EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:-}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      EMAIL_USE_TLS: ${EMAIL_USE_TLS:-1}
+      EMAIL_USE_SSL: ${EMAIL_USE_SSL:-0}
     mem_limit: 128m
     cpus: 0.5
     networks:
       - personal-net
 
   plane-api:
-    image: makeplane/plane-backend:stable
+    build:
+      context: ../servers/plane-fork/apps/api
+      dockerfile: Dockerfile.api
+    image: stewardos/plane-backend:${PLANE_BACKEND_RELEASE:-v1.2.3-api-v1}
     container_name: plane-api
     restart: unless-stopped
     command: ./bin/docker-entrypoint-api.sh
@@ -544,7 +558,10 @@ services:
           - api
 
   plane-worker:
-    image: makeplane/plane-backend:stable
+    build:
+      context: ../servers/plane-fork/apps/api
+      dockerfile: Dockerfile.api
+    image: stewardos/plane-backend:${PLANE_BACKEND_RELEASE:-v1.2.3-api-v1}
     container_name: plane-worker
     restart: unless-stopped
     command: ./bin/docker-entrypoint-worker.sh
@@ -559,7 +576,10 @@ services:
       - personal-net
 
   plane-beat:
-    image: makeplane/plane-backend:stable
+    build:
+      context: ../servers/plane-fork/apps/api
+      dockerfile: Dockerfile.api
+    image: stewardos/plane-backend:${PLANE_BACKEND_RELEASE:-v1.2.3-api-v1}
     container_name: plane-beat
     restart: unless-stopped
     command: ./bin/docker-entrypoint-beat.sh
@@ -574,7 +594,7 @@ services:
       - personal-net
 
   plane-web:
-    image: makeplane/plane-frontend:stable
+    image: ${PLANE_IMAGE_REGISTRY:-makeplane}/plane-frontend:${PLANE_APP_RELEASE:-v1.2.3}
     container_name: plane-web
     restart: unless-stopped
     security_opt:
@@ -587,7 +607,7 @@ services:
           - web
 
   plane-admin:
-    image: makeplane/plane-admin:stable
+    image: ${PLANE_IMAGE_REGISTRY:-makeplane}/plane-admin:${PLANE_APP_RELEASE:-v1.2.3}
     container_name: plane-admin
     restart: unless-stopped
     security_opt:
@@ -600,11 +620,17 @@ services:
           - admin
 
   plane-space:
-    image: makeplane/plane-space:stable
+    image: ${PLANE_IMAGE_REGISTRY:-makeplane}/plane-space:${PLANE_APP_RELEASE:-v1.2.3}
     container_name: plane-space
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/spaces/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     mem_limit: 192m
     cpus: 0.5
     networks:
@@ -613,7 +639,7 @@ services:
           - space
 
   plane-live:
-    image: makeplane/plane-live:stable
+    image: ${PLANE_IMAGE_REGISTRY:-makeplane}/plane-live:${PLANE_APP_RELEASE:-v1.2.3}
     container_name: plane-live
     restart: unless-stopped
     security_opt:
@@ -624,9 +650,16 @@ services:
     environment:
       API_BASE_URL: http://api:8000
       REDIS_URL: redis://plane-valkey:6379/
+      LIVE_SERVER_SECRET_KEY: ${LIVE_SERVER_SECRET_KEY}
       LIVE_SENTRY_DSN: ""
       LIVE_SENTRY_ENVIRONMENT: ""
       LIVE_SENTRY_TRACES_SAMPLE_RATE: ""
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/live/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     mem_limit: 256m
     cpus: 0.5
     networks:
@@ -635,7 +668,7 @@ services:
           - live
 
   plane-proxy:
-    image: makeplane/plane-proxy:stable
+    image: ${PLANE_IMAGE_REGISTRY:-makeplane}/plane-proxy:${PLANE_APP_RELEASE:-v1.2.3}
     container_name: plane-proxy
     restart: unless-stopped
     security_opt:

@@ -17,6 +17,41 @@ from src.models import IncomingEmail
 from src.session_store import SessionStore
 
 
+class _FakeResponse:
+    def __init__(self, payload=None):
+        self._payload = payload or {}
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self):
+        return self._payload
+
+
+class _FakeAsyncClient:
+    def __init__(self):
+        self.calls: list[tuple[str, str, dict | None]] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def patch(self, url, *, headers=None, json=None):
+        self.calls.append(("PATCH", url, json))
+        return _FakeResponse()
+
+    async def get(self, url, *, headers=None):
+        self.calls.append(("GET", url, None))
+        return _FakeResponse(
+            [
+                {"id": "state-completed", "group": "completed"},
+                {"id": "state-started", "group": "started"},
+            ]
+        )
+
+
 def _reset_session_store(tmp_path: Path) -> None:
     settings.database_url = get_test_database_url(tmp_path)
     asyncio.run(SessionStore.reset_for_tests())
@@ -49,7 +84,8 @@ def test_specialist_executes_task_directly(tmp_path):
         "id": "task-abc",
         "name": "Research task",
         "description_stripped": "Analyze market trends",
-        "labels": [{"name": "target_alias:ra"}],
+        "coordination": {"route_to": "ra", "coordination_status": "delegated"},
+        "parent": "case-1",
         "project": "proj-1",
     }
 
@@ -65,6 +101,10 @@ def test_specialist_executes_task_directly(tmp_path):
     with patch("src.main.settings") as mock_settings, \
          patch("src.main.call_codex", new_callable=AsyncMock, return_value=mock_result), \
          patch("src.main._complete_plane_work_item", new_callable=AsyncMock) as mock_complete, \
+         patch("src.main.SessionStore.get_session", new_callable=AsyncMock, return_value=None), \
+         patch("src.main.SessionStore.store_session", new_callable=AsyncMock), \
+         patch("src.main.SessionStore.get_case", new_callable=AsyncMock, return_value=None), \
+         patch("src.plane_poller.check_case_completion", new_callable=AsyncMock), \
          patch("src.main._execute_with_ordering", new=_passthrough_ordering):
         mock_settings.alias_persona_map = {"ra": "research-analyst"}
         mock_settings.resolve_persona_dir.return_value = "/fake/dir"
@@ -77,7 +117,7 @@ def test_specialist_executes_task_directly(tmp_path):
 
 
 def test_unknown_alias_ignored(tmp_path):
-    """Work items with unknown target_alias labels are silently skipped."""
+    """Work items with unknown coordination routes are silently skipped."""
     _reset_session_store(tmp_path)
 
     from src.main import _handle_plane_work_item_created
@@ -86,7 +126,8 @@ def test_unknown_alias_ignored(tmp_path):
         "id": "task-xyz",
         "name": "Unknown task",
         "description_stripped": "Something",
-        "labels": [{"name": "target_alias:nonexistent"}],
+        "coordination": {"route_to": "nonexistent", "coordination_status": "delegated"},
+        "parent": "case-1",
         "project": "proj-1",
     }
 
@@ -99,8 +140,8 @@ def test_unknown_alias_ignored(tmp_path):
         mock_codex.assert_not_called()
 
 
-def test_no_target_alias_label_ignored(tmp_path):
-    """Work items without target_alias labels are silently skipped."""
+def test_no_route_to_ignored(tmp_path):
+    """Work items without coordination.route_to are silently skipped."""
     _reset_session_store(tmp_path)
 
     from src.main import _handle_plane_work_item_created
@@ -109,7 +150,7 @@ def test_no_target_alias_label_ignored(tmp_path):
         "id": "task-nolabel",
         "name": "Regular task",
         "description_stripped": "A task with no alias",
-        "labels": [{"name": "priority:high"}],
+        "coordination": {},
         "project": "proj-1",
     }
 
@@ -129,7 +170,8 @@ def test_specialist_failure_does_not_complete_item(tmp_path):
         "id": "task-fail",
         "name": "Failing task",
         "description_stripped": "Will fail",
-        "labels": [{"name": "target_alias:ra"}],
+        "coordination": {"route_to": "ra", "coordination_status": "delegated"},
+        "parent": "case-1",
         "project": "proj-1",
     }
 
@@ -142,6 +184,8 @@ def test_specialist_failure_does_not_complete_item(tmp_path):
     with patch("src.main.settings") as mock_settings, \
          patch("src.main.call_codex", new_callable=AsyncMock, return_value=mock_result), \
          patch("src.main._complete_plane_work_item", new_callable=AsyncMock) as mock_complete, \
+         patch("src.main.SessionStore.get_session", new_callable=AsyncMock, return_value=None), \
+         patch("src.main.SessionStore.get_case", new_callable=AsyncMock, return_value=None), \
          patch("src.main._execute_with_ordering", new=_passthrough_ordering):
         mock_settings.alias_persona_map = {"ra": "research-analyst"}
         mock_settings.resolve_persona_dir.return_value = "/fake/dir"
@@ -151,6 +195,50 @@ def test_specialist_failure_does_not_complete_item(tmp_path):
         asyncio.run(_handle_plane_work_item_created(data, workspace_slug="investment-office"))
 
         mock_complete.assert_not_called()
+
+
+def test_complete_plane_work_item_marks_coordination_done_before_state_transition(tmp_path):
+    """Specialist completion explicitly updates coordination state before workflow state."""
+    _reset_session_store(tmp_path)
+
+    from src.main import _complete_plane_work_item
+
+    fake_client = _FakeAsyncClient()
+
+    with patch("src.main.httpx.AsyncClient", return_value=fake_client), \
+         patch("src.main.settings") as mock_settings:
+        mock_settings.plane_base_url = "http://plane"
+        mock_settings.plane_api_token = "tok"
+
+        asyncio.run(
+            _complete_plane_work_item(
+                {"project": "proj-1"},
+                "task-123",
+                workspace_slug="chief-of-staff",
+            )
+        )
+
+    assert fake_client.calls[0] == (
+        "PATCH",
+        "http://plane/api/v1/workspaces/chief-of-staff/projects/proj-1/work-items/task-123/coordination/",
+        {
+            "coordination_status": "done",
+            "waiting_on": "",
+            "waiting_since": None,
+            "claimed_by_id": None,
+            "claim_expires_at": None,
+        },
+    )
+    assert fake_client.calls[1] == (
+        "GET",
+        "http://plane/api/v1/workspaces/chief-of-staff/projects/proj-1/states/",
+        None,
+    )
+    assert fake_client.calls[2] == (
+        "PATCH",
+        "http://plane/api/v1/workspaces/chief-of-staff/projects/proj-1/work-items/task-123/",
+        {"state": "state-completed"},
+    )
 
 
 # ─── Unified Case Record Tests ──────────────────────────────────────────

@@ -106,7 +106,7 @@ def register_status_tools(mcp, get_pool, ensure_initialized):
             )
             counts = await conn.fetchrow(
                 """SELECT
-                       (SELECT COUNT(*) FROM subjects) AS subjects,
+                       (SELECT COUNT(*) FROM people) AS people,
                        (SELECT COUNT(*) FROM callsets) AS callsets,
                        (SELECT COUNT(*) FROM genotype_calls) AS genotype_calls,
                        (SELECT COUNT(*) FROM clinical_assertions) AS clinical_assertions,

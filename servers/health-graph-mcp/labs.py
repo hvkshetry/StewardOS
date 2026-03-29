@@ -12,7 +12,7 @@ def register_lab_tools(mcp, get_pool, ensure_initialized):
 
     @_tool
     async def query_labs(
-        subject_id: int,
+        person_id: int,
         code: str = "",
         since_date: str = "",
         limit: int = 200,
@@ -21,8 +21,8 @@ def register_lab_tools(mcp, get_pool, ensure_initialized):
         await ensure_initialized()
         pool = await get_pool()
 
-        clauses = ["subject_id = $1"]
-        params: list[Any] = [subject_id]
+        clauses = ["person_id = $1"]
+        params: list[Any] = [person_id]
         idx = 2
         if code:
             clauses.append(f"code = ${idx}")
@@ -45,7 +45,7 @@ def register_lab_tools(mcp, get_pool, ensure_initialized):
         return _rows_to_dicts(rows)
 
     @_tool
-    async def get_lab_trends(subject_id: int, code: str, days: int = 365) -> dict:
+    async def get_lab_trends(person_id: int, code: str, days: int = 365) -> dict:
         """Summarize lab trends for a code over a time window."""
         await ensure_initialized()
         pool = await get_pool()
@@ -55,12 +55,12 @@ def register_lab_tools(mcp, get_pool, ensure_initialized):
             rows = await conn.fetch(
                 """SELECT value_numeric, effective_at
                    FROM observations
-                   WHERE subject_id=$1
+                   WHERE person_id=$1
                      AND code=$2
                      AND value_numeric IS NOT NULL
                      AND effective_at >= $3
                    ORDER BY effective_at""",
-                subject_id,
+                person_id,
                 code,
                 since_dt,
             )
@@ -68,7 +68,7 @@ def register_lab_tools(mcp, get_pool, ensure_initialized):
         series = [float(r["value_numeric"]) for r in rows if r["value_numeric"] is not None]
         if not series:
             return {
-                "subject_id": subject_id,
+                "person_id": person_id,
                 "code": code,
                 "days": days,
                 "count": 0,
@@ -83,7 +83,7 @@ def register_lab_tools(mcp, get_pool, ensure_initialized):
                 trend = "decreasing"
 
         return {
-            "subject_id": subject_id,
+            "person_id": person_id,
             "code": code,
             "days": days,
             "count": len(series),

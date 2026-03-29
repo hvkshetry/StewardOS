@@ -21,11 +21,10 @@ startup_timeout_sec = 60
 env = { WORKSPACE_MCP_CREDENTIALS_DIR = "/path/to/stewardos/agent-configs/.shared-google-creds-agent-rw", USER_GOOGLE_EMAIL = "agent.mailbox@example.com", WORKSPACE_MCP_PORT = "8017", GOOGLE_OAUTH_CLIENT_ID = "${GOOGLE_OAUTH_CLIENT_ID}", GOOGLE_OAUTH_CLIENT_SECRET = "${GOOGLE_OAUTH_CLIENT_SECRET}" }
 
 [mcp_servers.actual-budget]
-command = "node"
-args = ["/path/to/stewardos/servers/actual-mcp/build/index.js"]
+command = "/path/to/stewardos/servers/actual-mcp/scripts/start_with_env.sh"
+args = []
 cwd = "/path/to/stewardos/servers/actual-mcp"
 startup_timeout_sec = 180
-env = { ACTUAL_SERVER_URL = "http://localhost:5006", ACTUAL_PASSWORD = "${ACTUAL_PASSWORD}", ACTUAL_BUDGET_SYNC_ID = "${ACTUAL_BUDGET_SYNC_ID}", ACTUAL_DATA_DIR = "/tmp/actual-mcp-data" }
 
 [mcp_servers.household-tax]
 command = "/path/to/stewardos/servers/household-tax-mcp/.venv/bin/python"

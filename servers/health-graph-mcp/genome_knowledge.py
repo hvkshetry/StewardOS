@@ -174,7 +174,7 @@ def register_genome_knowledge_tools(mcp, get_pool, ensure_initialized):
 
     @_tool
     async def hydrate_subject_genome_knowledge(
-        subject_id: int,
+        person_id: int,
         mode: str = "delta",
         tiers: str | list[int] | list[str] = "1,2,3,4",
         max_literature_per_item: int = 5,
@@ -183,8 +183,8 @@ def register_genome_knowledge_tools(mcp, get_pool, ensure_initialized):
         await ensure_initialized()
         pool = await get_pool()
 
-        if subject_id <= 0:
-            return _error_response("subject_id must be > 0", code="validation_error")
+        if person_id <= 0:
+            return _error_response("person_id must be > 0", code="validation_error")
 
         mode_normalized = (mode or "delta").strip().lower()
         if mode_normalized not in {"delta", "bulk"}:
@@ -210,15 +210,15 @@ def register_genome_knowledge_tools(mcp, get_pool, ensure_initialized):
                 source_name="health_graph_hydrator",
                 run_type="hydrate_subject_genome_knowledge",
                 metadata={
-                    "subject_id": subject_id,
+                    "person_id": person_id,
                     "requested_mode": mode_normalized,
                     "tiers": tier_list,
                     "max_literature_per_item": lit_cap,
                 },
             )
             try:
-                if not await _subject_has_genome_data(conn, subject_id):
-                    raise ValueError(f"subject_id {subject_id} has no genotype data")
+                if not await _subject_has_genome_data(conn, person_id):
+                    raise ValueError(f"person_id {person_id} has no genotype data")
 
                 variant_map: dict[str, int] = {}
                 assertion_map: dict[str, int] = {}
@@ -227,7 +227,7 @@ def register_genome_knowledge_tools(mcp, get_pool, ensure_initialized):
                 if 1 in tier_set:
                     for rule in _PGX_HYDRATION_RULES:
                         rsid = str(rule["rsid"])
-                        subject_variant = await _subject_variant_for_rsid(conn, subject_id, rsid)
+                        subject_variant = await _subject_variant_for_rsid(conn, person_id, rsid)
                         if not subject_variant:
                             continue
                         rows_read += 1
@@ -245,15 +245,15 @@ def register_genome_knowledge_tools(mcp, get_pool, ensure_initialized):
 
                         await conn.execute(
                             """INSERT INTO pgx_diplotypes (
-                                   subject_id, gene_symbol, source_diplotype, recommendation_diplotype,
+                                   person_id, gene_symbol, source_diplotype, recommendation_diplotype,
                                    outside_call, match_score, source_name, source_json
                                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
                                ON CONFLICT (
-                                   subject_id, gene_symbol, source_name,
+                                   person_id, gene_symbol, source_name,
                                    COALESCE(source_diplotype, ''), COALESCE(recommendation_diplotype, '')
                                )
                                DO UPDATE SET source_json = EXCLUDED.source_json""",
-                            subject_id,
+                            person_id,
                             gene_symbol,
                             str(rule.get("source_diplotype") or ""),
                             str(rule.get("recommendation_diplotype") or ""),
@@ -272,14 +272,14 @@ def register_genome_knowledge_tools(mcp, get_pool, ensure_initialized):
 
                         await conn.execute(
                             """INSERT INTO pgx_phenotypes (
-                                   subject_id, gene_symbol, phenotype, activity_score, phenotype_source, source_json
+                                   person_id, gene_symbol, phenotype, activity_score, phenotype_source, source_json
                                ) VALUES ($1,$2,$3,$4,$5,$6::jsonb)
                                ON CONFLICT (
-                                   subject_id, gene_symbol, COALESCE(phenotype, ''),
+                                   person_id, gene_symbol, COALESCE(phenotype, ''),
                                    COALESCE(activity_score, ''), COALESCE(phenotype_source, '')
                                )
                                DO UPDATE SET source_json = EXCLUDED.source_json""",
-                            subject_id,
+                            person_id,
                             gene_symbol,
                             str(rule.get("phenotype") or ""),
                             None,
@@ -290,17 +290,17 @@ def register_genome_knowledge_tools(mcp, get_pool, ensure_initialized):
 
                         await conn.execute(
                             """INSERT INTO pgx_recommendations (
-                                   subject_id, gene_symbol, drug_name, recommendation_text,
+                                   person_id, gene_symbol, drug_name, recommendation_text,
                                    source_name, source_record_id, evidence_tier, action_class,
                                    confidence_score, metadata
                                ) VALUES ($1,$2,$3,$4,$5,$6,1,'actionable_with_guardrails',$7,$8::jsonb)
                                ON CONFLICT (
-                                   subject_id, COALESCE(gene_symbol, ''), COALESCE(drug_name, ''),
+                                   person_id, COALESCE(gene_symbol, ''), COALESCE(drug_name, ''),
                                    source_name, COALESCE(source_record_id, ''), recommendation_text
                                )
                                DO UPDATE SET confidence_score = EXCLUDED.confidence_score,
                                              metadata = EXCLUDED.metadata""",
-                            subject_id,
+                            person_id,
                             gene_symbol,
                             str(rule.get("drug_name") or ""),
                             str(rule.get("recommendation_text") or ""),
@@ -321,7 +321,7 @@ def register_genome_knowledge_tools(mcp, get_pool, ensure_initialized):
                 if 2 in tier_set:
                     for rule in _CLINICAL_ASSERTION_RULES:
                         rsid = str(rule["rsid"])
-                        subject_variant = await _subject_variant_for_rsid(conn, subject_id, rsid)
+                        subject_variant = await _subject_variant_for_rsid(conn, person_id, rsid)
                         if not subject_variant:
                             continue
                         rows_read += 1
@@ -394,7 +394,7 @@ def register_genome_knowledge_tools(mcp, get_pool, ensure_initialized):
                         continue
 
                     rsid = str(rule["rsid"])
-                    subject_variant = await _subject_variant_for_rsid(conn, subject_id, rsid)
+                    subject_variant = await _subject_variant_for_rsid(conn, person_id, rsid)
                     if not subject_variant:
                         continue
                     rows_read += 1
@@ -513,7 +513,7 @@ def register_genome_knowledge_tools(mcp, get_pool, ensure_initialized):
                 await _finish_run(conn, run_id, "success", rows_read, rows_written)
                 return {
                     "ingestion_run_id": run_id,
-                    "subject_id": subject_id,
+                    "person_id": person_id,
                     "mode": "delta",
                     "requested_mode": mode_normalized,
                     "tiers": tier_list,
@@ -528,7 +528,7 @@ def register_genome_knowledge_tools(mcp, get_pool, ensure_initialized):
                     code="hydration_error",
                     payload={
                         "ingestion_run_id": run_id,
-                        "subject_id": subject_id,
+                        "person_id": person_id,
                         "rows_read": rows_read,
                         "rows_written": rows_written,
                         "summary": summary,

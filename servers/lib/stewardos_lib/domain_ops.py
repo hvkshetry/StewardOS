@@ -162,20 +162,10 @@ async def list_entities_query(
 
 async def list_people_query(
     pool: asyncpg.Pool,
-    *,
-    include_estate_fields: bool = False,
 ) -> list[asyncpg.Record]:
-    select_columns = [
-        "id",
-        "legal_name",
-        "preferred_name",
-        "citizenship",
-        "residency_status",
-    ]
-    if include_estate_fields:
-        select_columns.extend(["death_date", "incapacity_status"])
     return await pool.fetch(
-        f"SELECT {', '.join(select_columns)} FROM people ORDER BY legal_name"
+        "SELECT id, legal_name, preferred_name, citizenship, residency_status, "
+        "death_date, incapacity_status FROM people ORDER BY legal_name"
     )
 
 

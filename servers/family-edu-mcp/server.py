@@ -20,7 +20,7 @@ from planning import register_planning_tools
 load_dotenv()
 
 DATABASE_URL = os.environ.get(
-    "DATABASE_URL", "postgresql://family_edu:changeme@localhost:5434/family_edu"
+    "DATABASE_URL", "postgresql://family_edu:changeme@localhost:5434/stewardos_db"
 )
 AUTO_APPLY_MIGRATIONS = os.environ.get("FAMILY_EDU_AUTO_APPLY_MIGRATIONS", "").strip().lower() in {
     "1",

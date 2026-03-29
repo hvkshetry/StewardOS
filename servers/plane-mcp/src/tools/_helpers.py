@@ -8,8 +8,14 @@ from typing import Any
 
 logger = logging.getLogger("plane-mcp")
 
+
 def home_workspace() -> str:
     return os.environ.get("PLANE_HOME_WORKSPACE", "")
+
+
+def display_name_from_slug(slug: str) -> str:
+    """Convert a workspace slug into a readable display name."""
+    return slug.replace("-", " ").title()
 
 
 def audit_log(
@@ -57,6 +63,36 @@ def extract(obj: Any, key: str, default: Any = "") -> Any:
     return getattr(obj, key, default)
 
 
+def is_not_found_error(exc: Exception) -> bool:
+    """Best-effort detection for 404s from httpx, requests, or plane-sdk."""
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 404:
+        return True
+
+    response = getattr(exc, "response", None)
+    if getattr(response, "status_code", None) == 404:
+        return True
+
+    message = str(exc)
+    return (
+        "404 Not Found" in message
+        or "HTTP 404" in message
+        or "status code 404" in message
+    )
+
+
+def not_found_response(resource: str, path: str) -> dict[str, Any]:
+    """Return a structured tool error for 404s instead of raw transport traces."""
+    return {
+        "ok": False,
+        "error": (
+            f"Plane returned 404 for {resource} at '{path}'. "
+            "This deployment may not expose that endpoint to admin PAT clients, "
+            "or the resource may not exist."
+        ),
+    }
+
+
 def work_item_to_dict(item: Any) -> dict[str, Any]:
     """Convert a work item (dict or SDK object) to a standard dict."""
     return {
@@ -70,6 +106,9 @@ def work_item_to_dict(item: Any) -> dict[str, Any]:
         "assignees": extract(item, "assignees", default=[]),
         "start_date": extract(item, "start_date"),
         "target_date": extract(item, "target_date"),
+        "external_source": extract(item, "external_source"),
+        "external_id": extract(item, "external_id"),
+        "coordination": extract(item, "coordination", default=None),
         "created_at": extract(item, "created_at"),
         "updated_at": extract(item, "updated_at"),
     }

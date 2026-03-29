@@ -11,7 +11,7 @@ Assertion-first health graph MCP server for genomics, PGx, lab trends, and insur
 
 ## Environment
 
-- `DATABASE_URL` (default: `postgresql://health:changeme@localhost:5434/health_graph`)
+- `DATABASE_URL` (default: `postgresql://health:changeme@localhost:5434/stewardos_db`)
 - `PAPERLESS_URL` (default: `http://localhost:8223`)
 - `PAPERLESS_API_TOKEN`
 - `OPEN_TARGETS_GRAPHQL_ENDPOINT` (default: `https://api.platform.opentargets.org/api/v4/graphql`)
@@ -24,7 +24,7 @@ uv run python server.py
 
 ## Hydration Model
 
-- Nightly hydration should use `hydrate_subject_genome_knowledge(subject_id=..., mode="delta")`.
+- Nightly hydration should use `hydrate_subject_genome_knowledge(person_id=..., mode="delta")`.
 - Runtime hydration is non-destructive and idempotent (no replace-seed mode).
 - Legacy seed cleanup is script-only:
   `scripts/purge_seed_hydration_once.sh` (not exposed as an MCP tool).

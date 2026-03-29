@@ -13,8 +13,8 @@ description: |
 
 | Task | MCP Server | Key Tools |
 |------|-----------|-----------|
-| Transaction history, balances, budgets | actual-mcp | `get_transactions`, `get_accounts`, `get_budget_months` |
-| Category breakdowns | actual-mcp | `get_categories`, `get_category_groups` |
+| Transaction history, balances, budgets | actual-budget | `transaction(operation="list")`, `account(operation="list")`, `budget(operation="months"|"month")` |
+| Category breakdowns | actual-budget | `analytics(operation="spending_by_category")`, `category(operation="groups_list")` |
 | Investment balances and allocation | ghostfolio-mcp | `get_portfolio_summary`, `get_portfolio_positions` |
 | Net worth calculation | Both | Actual (cash/debt) + Ghostfolio (investments) |
 
@@ -22,7 +22,7 @@ description: |
 
 ### Category Breakdown
 
-1. Pull transactions for the target period using `get_transactions` with date range filters
+1. Pull transactions for the target period using `transaction(operation="list")` with date range filters
 2. Group by category — report both absolute amounts and percentage of total spend
 3. Flag categories that exceed their budget allocation
 4. Present results as a ranked table: Category | Budgeted | Actual | Variance | % of Total
@@ -45,7 +45,7 @@ description: |
 
 ### Monthly Variance Report
 
-1. Pull budget allocations via `get_budget_months` for the target month
+1. Pull budget allocations via `budget(operation="month")` for the target month
 2. Pull actual spend by category for the same period
 3. Compute variance: `actual - budgeted` (negative = under budget, positive = over budget)
 4. Present as table: Category | Budget | Actual | Variance | Status (Over/Under/On Track)
@@ -91,7 +91,7 @@ Net Savings Rate   = (Total Income - Total Expenses - Taxes) / (Total Income - T
 
 ### Short-Term (Next 30-60 Days)
 
-1. Start with current account balances from `get_accounts`
+1. Start with current account balances from `account(operation="list")`
 2. Identify recurring income (salary dates, rental income, dividends)
 3. Identify recurring expenses (rent/mortgage, subscriptions, loan payments, insurance)
 4. Subtract known upcoming one-time expenses (if any flagged by user)

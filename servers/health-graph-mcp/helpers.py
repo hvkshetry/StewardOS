@@ -323,22 +323,22 @@ async def _policy_for_tier(conn: asyncpg.Connection, evidence_tier: int, action_
     }
 
 
-async def _subject_has_genome_data(conn: asyncpg.Connection, subject_id: int) -> bool:
+async def _subject_has_genome_data(conn: asyncpg.Connection, person_id: int) -> bool:
     row = await conn.fetchrow(
         """SELECT 1
            FROM samples s
            JOIN callsets c ON c.sample_id = s.id
            JOIN genotype_calls gc ON gc.callset_id = c.id
-           WHERE s.subject_id = $1
+           WHERE s.person_id = $1
            LIMIT 1""",
-        subject_id,
+        person_id,
     )
     return row is not None
 
 
 async def _subject_has_variant_match(
     conn: asyncpg.Connection,
-    subject_id: int,
+    person_id: int,
     rsid: str | None,
     chromosome: str | None,
     position: int | None,
@@ -351,13 +351,13 @@ async def _subject_has_variant_match(
            FROM genotype_calls gc
            JOIN callsets c ON c.id = gc.callset_id
            JOIN samples s ON s.id = c.sample_id
-           WHERE s.subject_id = $1
+           WHERE s.person_id = $1
              AND (
                ($2::text IS NOT NULL AND gc.rsid = $2)
                OR ($3::text IS NOT NULL AND $4::int IS NOT NULL AND gc.chromosome = $3 AND gc.position = $4)
              )
            LIMIT 1""",
-        subject_id,
+        person_id,
         rsid,
         chromosome,
         position,
@@ -365,7 +365,7 @@ async def _subject_has_variant_match(
     return row is not None
 
 
-async def _subject_has_any_rsid_match(conn: asyncpg.Connection, subject_id: int, rsids: set[str]) -> bool:
+async def _subject_has_any_rsid_match(conn: asyncpg.Connection, person_id: int, rsids: set[str]) -> bool:
     normalized = sorted({r.lower() for r in rsids if r})
     if not normalized:
         return False
@@ -374,10 +374,10 @@ async def _subject_has_any_rsid_match(conn: asyncpg.Connection, subject_id: int,
            FROM genotype_calls gc
            JOIN callsets c ON c.id = gc.callset_id
            JOIN samples s ON s.id = c.sample_id
-           WHERE s.subject_id = $1
+           WHERE s.person_id = $1
              AND lower(gc.rsid) = ANY($2::text[])
            LIMIT 1""",
-        subject_id,
+        person_id,
         normalized,
     )
     return row is not None
@@ -385,7 +385,7 @@ async def _subject_has_any_rsid_match(conn: asyncpg.Connection, subject_id: int,
 
 async def _subject_variant_for_rsid(
     conn: asyncpg.Connection,
-    subject_id: int,
+    person_id: int,
     rsid: str,
 ) -> dict | None:
     row = await conn.fetchrow(
@@ -394,11 +394,11 @@ async def _subject_variant_for_rsid(
            JOIN callsets c ON c.id = gc.callset_id
            JOIN samples s ON s.id = c.sample_id
            LEFT JOIN variant_canonical vc ON vc.id = gc.variant_id
-           WHERE s.subject_id = $1
+           WHERE s.person_id = $1
              AND lower(gc.rsid) = lower($2)
            ORDER BY gc.id DESC
            LIMIT 1""",
-        subject_id,
+        person_id,
         rsid,
     )
     return _row_to_dict(row)

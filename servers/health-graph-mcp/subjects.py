@@ -51,7 +51,7 @@ def register_subject_tools(mcp, get_pool, ensure_initialized):
         date_of_birth: str = "",
         sex_at_birth: str = "",
         metadata: dict | str | None = None,
-        subject_id: int | None = None,
+        person_id: int | None = None,
         identifiers: list[dict] | str | None = None,
     ) -> dict:
         """Create or update a subject using explicit identity keys."""
@@ -68,16 +68,16 @@ def register_subject_tools(mcp, get_pool, ensure_initialized):
 
         async with pool.acquire() as conn:
             async with conn.transaction():
-                resolved_subject_id = subject_id
-                if subject_id is not None:
-                    existing_subject = await conn.fetchrow("SELECT * FROM subjects WHERE id = $1", subject_id)
-                    if existing_subject is None:
-                        return _error_response(f"subject_id {subject_id} not found", code="not_found")
+                resolved_person_id = person_id
+                if person_id is not None:
+                    existing_person = await conn.fetchrow("SELECT * FROM people WHERE id = $1", person_id)
+                    if existing_person is None:
+                        return _error_response(f"person_id {person_id} not found", code="not_found")
 
-                matched_subject_ids: set[int] = set()
+                matched_person_ids: set[int] = set()
                 for identifier in identifier_rows:
                     match = await conn.fetchrow(
-                        """SELECT subject_id
+                        """SELECT person_id
                            FROM subject_identifiers
                            WHERE upper(btrim(id_type)) = $1
                              AND btrim(id_value) = $2
@@ -86,53 +86,68 @@ def register_subject_tools(mcp, get_pool, ensure_initialized):
                         identifier["id_value"],
                     )
                     if match is not None:
-                        matched_subject_ids.add(int(match["subject_id"]))
+                        matched_person_ids.add(int(match["person_id"]))
 
-                if resolved_subject_id is not None and matched_subject_ids and matched_subject_ids != {resolved_subject_id}:
+                if resolved_person_id is not None and matched_person_ids and matched_person_ids != {resolved_person_id}:
                     return _error_response(
-                        "Provided identifiers resolve to a different subject_id",
+                        "Provided identifiers resolve to a different person_id",
                         code="validation_error",
                     )
-                if resolved_subject_id is None:
-                    if len(matched_subject_ids) > 1:
+                if resolved_person_id is None:
+                    if len(matched_person_ids) > 1:
                         return _error_response(
-                            "Provided identifiers resolve to multiple subjects",
+                            "Provided identifiers resolve to multiple people",
                             code="validation_error",
                         )
-                    if len(matched_subject_ids) == 1:
-                        resolved_subject_id = next(iter(matched_subject_ids))
+                    if len(matched_person_ids) == 1:
+                        resolved_person_id = next(iter(matched_person_ids))
 
                 status = "created"
-                if resolved_subject_id is None:
+                if resolved_person_id is None:
+                    # Insert into core.people (via search_path) + health.subject_profiles
                     row = await conn.fetchrow(
-                        """INSERT INTO subjects (display_name, date_of_birth, sex_at_birth, metadata)
-                           VALUES ($1, $2, $3, $4::jsonb)
+                        """INSERT INTO people (legal_name, preferred_name, date_of_birth)
+                           VALUES ($1, $2, $3)
                            RETURNING *""",
                         display_name,
+                        display_name,
                         dob_value,
+                    )
+                    assert row is not None
+                    resolved_person_id = int(row["id"])
+                    await conn.execute(
+                        """INSERT INTO health.subject_profiles (person_id, sex_at_birth, metadata)
+                           VALUES ($1, $2, $3::jsonb)
+                           ON CONFLICT (person_id) DO UPDATE SET
+                               sex_at_birth = COALESCE(EXCLUDED.sex_at_birth, health.subject_profiles.sex_at_birth),
+                               metadata = health.subject_profiles.metadata || EXCLUDED.metadata,
+                               updated_at = NOW()""",
+                        resolved_person_id,
                         sex_at_birth or None,
                         _to_json(meta),
                     )
                 else:
                     status = "updated"
-                    row = await conn.fetchrow(
-                        """UPDATE subjects
-                           SET display_name = COALESCE($2, display_name),
-                               date_of_birth = COALESCE($3, date_of_birth),
-                               sex_at_birth = COALESCE($4, sex_at_birth),
-                               metadata = metadata || $5::jsonb,
-                               updated_at = NOW()
-                           WHERE id = $1
-                           RETURNING *""",
-                        resolved_subject_id,
-                        display_name or None,
-                        dob_value,
+                    # Per plan: only update subject_profiles, NOT core.people
+                    # (canonical person data is owned by finance/estate)
+                    await conn.execute(
+                        """INSERT INTO health.subject_profiles (person_id, sex_at_birth, metadata)
+                           VALUES ($1, $2, $3::jsonb)
+                           ON CONFLICT (person_id) DO UPDATE SET
+                               sex_at_birth = COALESCE(EXCLUDED.sex_at_birth, health.subject_profiles.sex_at_birth),
+                               metadata = health.subject_profiles.metadata || EXCLUDED.metadata,
+                               updated_at = NOW()""",
+                        resolved_person_id,
                         sex_at_birth or None,
                         _to_json(meta),
                     )
+                    row = await conn.fetchrow(
+                        "SELECT * FROM people WHERE id = $1",
+                        resolved_person_id,
+                    )
 
                 assert row is not None
-                resolved_subject_id = int(row["id"])
+                resolved_person_id = int(row["id"])
                 linked_identifiers: list[dict] = []
                 for identifier in identifier_rows:
                     existing_identifier = await conn.fetchrow(
@@ -145,11 +160,11 @@ def register_subject_tools(mcp, get_pool, ensure_initialized):
                         identifier["id_value"],
                     )
                     if existing_identifier is not None:
-                        if int(existing_identifier["subject_id"]) != resolved_subject_id:
+                        if int(existing_identifier["person_id"]) != resolved_person_id:
                             return _error_response(
                                 (
                                     f"Identifier {identifier['id_type']}:{identifier['id_value']} already belongs to "
-                                    f"subject_id {existing_identifier['subject_id']}"
+                                    f"person_id {existing_identifier['person_id']}"
                                 ),
                                 code="conflict",
                             )
@@ -163,10 +178,10 @@ def register_subject_tools(mcp, get_pool, ensure_initialized):
                         )
                     else:
                         identifier_row = await conn.fetchrow(
-                            """INSERT INTO subject_identifiers (subject_id, id_type, id_value, source_name)
+                            """INSERT INTO subject_identifiers (person_id, id_type, id_value, source_name)
                                VALUES ($1, $2, $3, $4)
                                RETURNING *""",
-                            resolved_subject_id,
+                            resolved_person_id,
                             identifier["id_type"],
                             identifier["id_value"],
                             identifier["source_name"],
@@ -185,12 +200,12 @@ def register_subject_tools(mcp, get_pool, ensure_initialized):
         await ensure_initialized()
         pool = await get_pool()
         async with pool.acquire() as conn:
-            rows = await conn.fetch("SELECT * FROM subjects ORDER BY id")
+            rows = await conn.fetch("SELECT * FROM people ORDER BY id")
         return _ok_response(_rows_to_dicts(rows))
 
     @mcp.tool()
     async def link_subject_identifier(
-        subject_id: int,
+        person_id: int,
         id_type: str,
         id_value: str,
         source_name: str = "",
@@ -204,9 +219,9 @@ def register_subject_tools(mcp, get_pool, ensure_initialized):
             return _error_response("id_type and id_value are required", code="validation_error")
         async with pool.acquire() as conn:
             async with conn.transaction():
-                subject_exists = await conn.fetchval("SELECT 1 FROM subjects WHERE id = $1", subject_id)
-                if not subject_exists:
-                    return _error_response(f"subject_id {subject_id} not found", code="not_found")
+                person_exists = await conn.fetchval("SELECT 1 FROM people WHERE id = $1", person_id)
+                if not person_exists:
+                    return _error_response(f"person_id {person_id} not found", code="not_found")
 
                 existing = await conn.fetchrow(
                     """SELECT *
@@ -218,11 +233,11 @@ def register_subject_tools(mcp, get_pool, ensure_initialized):
                     normalized_value,
                 )
                 if existing is not None:
-                    if int(existing["subject_id"]) != subject_id:
+                    if int(existing["person_id"]) != person_id:
                         return _error_response(
                             (
                                 f"Identifier {normalized_type}:{normalized_value} already belongs to "
-                                f"subject_id {existing['subject_id']}"
+                                f"person_id {existing['person_id']}"
                             ),
                             code="conflict",
                         )
@@ -236,10 +251,10 @@ def register_subject_tools(mcp, get_pool, ensure_initialized):
                     )
                 else:
                     row = await conn.fetchrow(
-                        """INSERT INTO subject_identifiers (subject_id, id_type, id_value, source_name)
+                        """INSERT INTO subject_identifiers (person_id, id_type, id_value, source_name)
                            VALUES ($1, $2, $3, $4)
                            RETURNING *""",
-                        subject_id,
+                        person_id,
                         normalized_type,
                         normalized_value,
                         source_name or None,

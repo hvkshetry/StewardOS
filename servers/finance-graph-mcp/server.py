@@ -27,7 +27,7 @@ from cross_cutting import register_cross_cutting_tools
 load_dotenv()
 
 DATABASE_URL = os.environ.get(
-    "DATABASE_URL", "postgresql://finance:changeme@localhost:5434/finance_graph"
+    "DATABASE_URL", "postgresql://finance:changeme@localhost:5434/stewardos_db"
 )
 AUTO_APPLY_MIGRATIONS = os.environ.get("FINANCE_GRAPH_AUTO_APPLY_MIGRATIONS", "").strip().lower() in {
     "1",

@@ -66,6 +66,7 @@ def test_inbound_reply_prompt_uses_reply_tool(monkeypatch):
     monkeypatch.setattr(main.SessionStore, "is_message_processed", return_false)
     monkeypatch.setattr(main.SessionStore, "get_session", return_none)
     monkeypatch.setattr(main.SessionStore, "get_case_by_thread", return_none)
+    monkeypatch.setattr(main, "_hydrate_case_from_plane_thread", return_none)
     monkeypatch.setattr(main.SessionStore, "record_message_result", noop)
     monkeypatch.setattr(main.SessionStore, "store_session", noop)
 
@@ -104,6 +105,11 @@ def test_inbound_reply_prompt_uses_reply_tool(monkeypatch):
     assert "Keep attribution inline by default when material" in prompt
     assert "Use a short final source note only when the reply is research-heavy" in prompt
     assert "Do not force KPI cards, dashboards, or a provenance table into routine replies" in prompt
+    assert "plane-pm.coordination" in prompt
+    assert 'operation="delegate"' in prompt
+    assert 'external_source="gmail_thread"' in prompt
+    assert "plane-pm.create_case" not in prompt
+    assert "plane-pm.create_agent_task" not in prompt
     assert "Executive Summary (2-minute scan)" not in prompt
     assert "Deep Dive and Data Provenance" not in prompt
     assert "`family-email-formatting` in `reply` mode" not in prompt
@@ -170,6 +176,7 @@ def test_inbound_reply_reuses_thread_session(monkeypatch):
     monkeypatch.setattr(main.SessionStore, "is_message_processed", return_false)
     monkeypatch.setattr(main.SessionStore, "get_session", return_existing_session)
     monkeypatch.setattr(main.SessionStore, "get_case_by_thread", noop)
+    monkeypatch.setattr(main, "_hydrate_case_from_plane_thread", noop)
     monkeypatch.setattr(main.SessionStore, "record_message_result", noop)
     monkeypatch.setattr(main.SessionStore, "store_session", record_session)
 
@@ -248,6 +255,7 @@ def test_inbound_reply_requires_gmail_tool_completion(monkeypatch):
     monkeypatch.setattr(main.SessionStore, "is_message_processed", return_false)
     monkeypatch.setattr(main.SessionStore, "get_session", return_none)
     monkeypatch.setattr(main.SessionStore, "get_case_by_thread", return_none)
+    monkeypatch.setattr(main, "_hydrate_case_from_plane_thread", return_none)
     monkeypatch.setattr(main.SessionStore, "record_message_result", record_message_result)
     monkeypatch.setattr(main.SessionStore, "store_session", return_none)
 
@@ -302,6 +310,7 @@ def test_inbound_reply_uses_tool_result_when_ack_missing(monkeypatch):
     monkeypatch.setattr(main.SessionStore, "is_message_processed", return_false)
     monkeypatch.setattr(main.SessionStore, "get_session", return_none)
     monkeypatch.setattr(main.SessionStore, "get_case_by_thread", return_none)
+    monkeypatch.setattr(main, "_hydrate_case_from_plane_thread", return_none)
     monkeypatch.setattr(main.SessionStore, "record_message_result", record_message_result)
     monkeypatch.setattr(main.SessionStore, "store_session", return_none)
 
@@ -369,6 +378,7 @@ def test_inbound_reply_prefers_tool_result_when_ack_mismatches(monkeypatch, capl
     monkeypatch.setattr(main.SessionStore, "is_message_processed", return_false)
     monkeypatch.setattr(main.SessionStore, "get_session", return_none)
     monkeypatch.setattr(main.SessionStore, "get_case_by_thread", return_none)
+    monkeypatch.setattr(main, "_hydrate_case_from_plane_thread", return_none)
     monkeypatch.setattr(main.SessionStore, "record_message_result", record_message_result)
     monkeypatch.setattr(main.SessionStore, "store_session", return_none)
 

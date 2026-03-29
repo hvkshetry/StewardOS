@@ -24,7 +24,7 @@ def register_coverage_tools(mcp, get_pool, ensure_initialized):
     async def ingest_coverage_artifacts(
         source_name: str,
         payload_json: str | dict | list,
-        subject_id: int = 0,
+        person_id: int = 0,
     ) -> dict:
         """Ingest codified coverage artifacts and optional rule updates."""
         await ensure_initialized()
@@ -93,7 +93,7 @@ def register_coverage_tools(mcp, get_pool, ensure_initialized):
                     "rows_written": rows_written,
                     "skipped_placeholder": skipped_placeholder,
                     "skipped_invalid": skipped_invalid,
-                    "subject_id": subject_id or None,
+                    "person_id": person_id or None,
                     }
                 )
             except Exception as exc:  # noqa: BLE001
@@ -111,7 +111,7 @@ def register_coverage_tools(mcp, get_pool, ensure_initialized):
 
     @_tool
     async def evaluate_coverage(
-        subject_id: int,
+        person_id: int,
         code_system: str,
         code_value: str,
     ) -> dict:
@@ -123,12 +123,12 @@ def register_coverage_tools(mcp, get_pool, ensure_initialized):
             coverage = await conn.fetchrow(
                 """SELECT *
                    FROM coverages
-                   WHERE subject_id=$1
+                   WHERE person_id=$1
                      AND (status IS NULL OR status IN ('active', 'in-force', 'inforce'))
                      AND (end_date IS NULL OR end_date >= CURRENT_DATE)
                    ORDER BY id DESC
                    LIMIT 1""",
-                subject_id,
+                person_id,
             )
 
             rules = await conn.fetch(
@@ -164,11 +164,11 @@ def register_coverage_tools(mcp, get_pool, ensure_initialized):
 
             det = await conn.fetchrow(
                 """INSERT INTO coverage_determinations (
-                       subject_id, coverage_id, code_system, code_value, decision,
+                       person_id, coverage_id, code_system, code_value, decision,
                        required_prior_auth, reason_codes, explanation, supporting_refs, metadata
                    ) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10::jsonb)
                    RETURNING *""",
-                subject_id,
+                person_id,
                 int(coverage["id"]) if coverage else None,
                 code_system,
                 code_value,
