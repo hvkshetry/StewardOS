@@ -1,11 +1,6 @@
 ---
 name: document-management
-description: |
-  Personal document management skill using Paperless-ngx. Use when: (1) Ingesting and filing
-  new documents, (2) Searching for existing documents, (3) Applying tags and correspondents,
-  (4) Managing retention policies, (5) Integrating documents with other personal workflows
-  (tax prep, medical records, insurance claims). Tools: paperless-mcp for all document
-  operations.
+description: "Personal document management skill using Paperless-ngx. Use when: (1) Ingesting and filing new documents, (2) Searching for existing documents, (3) Applying tags and correspondents, (4) Managing retention policies, (5) Integrating documents with other personal workflows (tax prep, medical records, insurance claims). Tools: paperless-mcp for all document operations."
 ---
 
 # Document Management
@@ -30,14 +25,28 @@ description: |
 For every new document:
 
 1. **Upload** the document via `upload_document`
-2. **Review auto-classification** — Paperless-ngx will attempt auto-tagging and correspondent matching
+
+```
+upload_document(document="/path/to/file.pdf", title="2026-02 Electricity Bill - Tata Power", correspondent="Tata Power", document_type="Bill", tags=["home", "recurring"])
+```
+
+2. **Review auto-classification** — Paperless-ngx will attempt auto-tagging and correspondent matching. If auto-classification assigned the wrong correspondent or tags, correct via `update_document`:
+
+```
+update_document(id=1234, correspondent="Tata Power", tags=["home", "recurring"])
+```
+
 3. **Verify and correct metadata**:
    - Title: Clear, descriptive, includes date if relevant (e.g., "2026-02 Electricity Bill - Tata Power")
    - Date: The document's date (issue date, statement date), not the upload date
    - Correspondent: The organization or person who issued the document
-   - Document type: Select from the taxonomy below
-   - Tags: Apply all relevant tags from the taxonomy below
-4. **Confirm filing** — Verify the document appears in expected searches
+   - Document type: Select from the taxonomy reference
+   - Tags: Apply all relevant tags from the taxonomy reference
+4. **Confirm filing** — Verify the document appears in expected searches by running `search_documents`:
+
+```
+search_documents(query="Electricity Bill Tata Power", tags=["home"])
+```
 
 ### Title Conventions
 
@@ -54,76 +63,9 @@ Use consistent title formatting for searchability:
 | Identity docs | `[Doc Type] - [Person]` | `Passport - Principal` |
 | Receipts | `YYYY-MM-DD Receipt - [Vendor] - [Amount]` | `2026-02-20 Receipt - Amazon - 4500` |
 
-## Tagging Taxonomy
+## Taxonomy Reference
 
-### Primary Category Tags
-
-Apply exactly one primary category tag per document:
-
-| Tag | Use For |
-|-----|---------|
-| `financial` | Bank statements, investment statements, tax documents, pay slips |
-| `medical` | Prescriptions, lab reports, discharge summaries, vaccination records |
-| `legal` | Contracts, agreements, court documents, notarized documents |
-| `education` | Certificates, transcripts, school communications, course materials |
-| `home` | Property documents, utility bills, maintenance records, warranties |
-| `vehicle` | Registration, insurance, service records, challans |
-| `insurance` | All insurance policies and claims (health, life, vehicle, property) |
-| `identity` | Passports, Aadhaar, PAN, driving license, voter ID |
-| `employment` | Offer letters, appraisals, relieving letters, pay slips |
-| `receipts` | Purchase receipts, invoices (not bills/statements) |
-
-### Secondary Tags (Apply as Many as Relevant)
-
-| Tag | Use For |
-|-----|---------|
-| `tax-relevant` | Any document needed for tax filing (80C, 80D, HRA, capital gains) |
-| `active-policy` | Insurance policies currently in force |
-| `expired` | Policies, contracts, IDs past their validity |
-| `needs-renewal` | Documents approaching expiry (flag 30-60 days before) |
-| `reimbursable` | Medical or business expenses eligible for reimbursement |
-| `warranty-active` | Products still under warranty |
-| `recurring` | Bills and statements that arrive regularly |
-| `original-physical` | Physical original exists and is filed (note location in custom field) |
-| `child-[name]` | Documents pertaining to a specific child |
-
-### Tag Hygiene Rules
-
-- Every document must have exactly one primary category tag
-- Apply `tax-relevant` liberally — it is easier to remove than to find missing documents at tax time
-- Review `needs-renewal` tagged documents monthly
-- When a policy expires, replace `active-policy` with `expired` and remove `needs-renewal`
-
-## Correspondent Management
-
-### Correspondent Naming Conventions
-
-- Use the official organization name, not abbreviations: "HDFC Bank" not "HDFC"
-- For individuals (doctors, lawyers): "Dr. Firstname Lastname" or "Adv. Firstname Lastname"
-- For government: "Income Tax Department", "RTO Hyderabad", etc.
-
-### When to Create New Correspondents
-
-- Only create a new correspondent when an existing one does not match
-- Before creating, search existing correspondents for partial matches
-- Merge duplicates when found (same entity, different name variants)
-
-## Document Types
-
-| Document Type | Description |
-|--------------|-------------|
-| Statement | Bank/credit card/investment periodic statements |
-| Bill | Utility bills, service invoices |
-| Policy | Insurance policies, warranty cards |
-| Certificate | Educational, professional, birth/marriage certificates |
-| Report | Medical reports, lab results, appraisals |
-| Agreement | Contracts, rental agreements, loan agreements |
-| Tax Form | Form 16, ITR acknowledgment, TDS certificates |
-| ID Document | Passports, Aadhaar, PAN, licenses |
-| Receipt | Purchase receipts, payment confirmations |
-| Letter | Correspondence, notices, official communications |
-| Prescription | Medical prescriptions |
-| Claim | Insurance claims, reimbursement filings |
+Document classification uses primary category tags (exactly one per document), secondary tags (as many as relevant), correspondents, and document types. See [references/TAXONOMY.md](references/TAXONOMY.md) for the complete taxonomy tables, naming conventions, and tag hygiene rules.
 
 ## Search Strategies
 
@@ -151,65 +93,28 @@ Apply exactly one primary category tag per document:
 
 ## Retention Policies
 
-### How Long to Keep Documents
-
-| Document Type | Retention Period | Notes |
-|--------------|-----------------|-------|
-| Tax returns and supporting docs | 7 years from filing | Legal requirement under IT Act |
-| Bank statements | 7 years | Tax audit support |
-| Pay slips | 7 years | Tax/employment verification |
-| Insurance policies | Duration of policy + 3 years | Claims can be filed after expiry |
-| Medical records | Indefinite | Lifetime medical history |
-| Property documents | Indefinite | Ownership proof |
-| Identity documents | Until replaced by renewed version | Keep expired passports indefinitely |
-| Utility bills | 1 year | Unless needed for address proof |
-| Receipts (general) | 1 year or warranty period | Whichever is longer |
-| Receipts (tax-relevant) | 7 years | Same as tax documents |
-| Employment documents | Indefinite | Career record |
-| Educational certificates | Indefinite | Permanent record |
-| Vehicle documents | Duration of ownership + 3 years | Transfer records for sold vehicles |
-| Warranties | Duration of warranty | Delete after warranty expires unless claim pending |
-
-### Retention Review Procedure
-
-Quarterly:
-1. Filter documents by `expired` tag
-2. Check if retention period has passed
-3. For documents past retention: verify no ongoing need, then archive or delete
-4. For utility bills > 1 year old without `tax-relevant` tag: safe to delete
+Quarterly retention reviews ensure expired documents are archived or deleted on schedule. See [references/RETENTION.md](references/RETENTION.md) for retention periods by document type and the review procedure.
 
 ## Integration with Other Skills
 
-### Tax Preparation (Budgeting Skill)
+### Tax Preparation
 
-At tax time:
 1. Search for all documents tagged `tax-relevant` within the financial year
-2. Group by deduction section (80C, 80D, 24, etc.)
-3. Verify completeness: each claimed deduction has supporting documentation
-4. Cross-reference against actual-mcp transaction data for amount verification
-5. Export or share relevant documents
+2. Group by deduction section (80C, 80D, 24, etc.) and verify each claimed deduction has supporting documentation
+3. Cross-reference against actual-mcp transaction data for amount verification
 
-### Medical Records (Family)
+### Medical Records
 
-When visiting a doctor or during medical events:
-1. Search for prior medical records by correspondent (hospital/doctor) or tag `medical`
-2. Pull recent lab reports and prescriptions for reference
-3. After the visit: upload any new documents and tag appropriately
-4. For children: always apply the `child-[name]` tag
+1. Search prior records by correspondent (hospital/doctor) or tag `medical`; pull recent lab reports and prescriptions
+2. After a visit, upload new documents with appropriate tags; for children, always apply the `child-[name]` tag
 
 ### Insurance Claims
 
-When filing a claim:
-1. Locate the active policy document: filter by `insurance` + `active-policy` + correspondent
-2. Gather supporting documents (medical reports for health, FIR for vehicle, etc.)
-3. Upload claim submission documents and tag as `claim`
-4. Track claim status by adding notes to the claim document
+1. Locate the active policy: filter by `insurance` + `active-policy` + correspondent
+2. Gather supporting documents (medical reports for health, FIR for vehicle, etc.) and upload claim submission documents tagged as `claim`
+3. Track claim status by adding notes to the claim document
 
-## Common Pitfalls
+## Key Reminders
 
-1. **Skipping metadata at upload** — Always complete title, date, correspondent, type, and tags immediately. Documents without metadata become unfindable.
-2. **Inconsistent titles** — Follow the title conventions above. A search for "electricity bill" should find all electricity bills.
-3. **Missing tax-relevant tags** — When in doubt, tag it. Removing an unnecessary tag is cheaper than missing a deduction.
-4. **Correspondent proliferation** — Search before creating. "HDFC Bank", "HDFC", and "HDFC Bank Ltd" should be one correspondent.
-5. **Ignoring document dates** — The document date is the date on the document (statement date, issue date), not when you uploaded it. Paperless uses this for date-range filtering.
-6. **Not reviewing needs-renewal** — Check monthly. An expired insurance policy with no renewal is a risk, not just a filing issue.
+1. **Ignoring document dates** — The document date is the date on the document (statement date, issue date), not when it was uploaded. Paperless uses this for date-range filtering.
+2. **Not reviewing needs-renewal** — Check monthly. An expired insurance policy with no renewal is a risk, not just a filing issue.
