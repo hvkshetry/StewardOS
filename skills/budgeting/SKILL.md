@@ -1,10 +1,6 @@
 ---
 name: budgeting
-description: |
-  Personal budgeting and financial planning skill. Use when: (1) Analyzing spending patterns
-  by category or time period, (2) Comparing budget vs actual spending, (3) Calculating savings
-  rates, (4) Forecasting cash flow, (5) Planning tax-aware financial decisions. Tools: actual-mcp
-  for budget/transaction data, ghostfolio-mcp for investment portfolio context.
+description: "Personal budgeting and financial planning skill. Use when: (1) Analyzing spending patterns by category or time period, (2) Comparing budget vs actual spending, (3) Calculating savings rates, (4) Forecasting cash flow, (5) Planning tax-aware financial decisions. Tools: actual-mcp for budget/transaction data, ghostfolio-mcp for investment portfolio context."
 ---
 
 # Personal Budgeting
@@ -23,6 +19,11 @@ description: |
 ### Category Breakdown
 
 1. Pull transactions for the target period using `transaction(operation="list")` with date range filters
+
+```
+transaction(operation="list", startDate="2025-01-01", endDate="2025-01-31", accountId="checking-main")
+```
+
 2. Group by category — report both absolute amounts and percentage of total spend
 3. Flag categories that exceed their budget allocation
 4. Present results as a ranked table: Category | Budgeted | Actual | Variance | % of Total
@@ -46,6 +47,11 @@ description: |
 ### Monthly Variance Report
 
 1. Pull budget allocations via `budget(operation="month")` for the target month
+
+```
+budget(operation="month", month="2025-01")
+```
+
 2. Pull actual spend by category for the same period
 3. Compute variance: `actual - budgeted` (negative = under budget, positive = over budget)
 4. Present as table: Category | Budget | Actual | Variance | Status (Over/Under/On Track)
@@ -84,6 +90,12 @@ Net Savings Rate   = (Total Income - Total Expenses - Taxes) / (Total Income - T
 ### Investment Contribution Context
 
 - Use ghostfolio-mcp to pull recent contributions to investment accounts
+
+```
+get_portfolio_summary()
+get_portfolio_positions()
+```
+
 - Include these in the savings rate numerator if they are not already captured as "transfers" in Actual
 - Report: Savings Rate (cash) vs Savings Rate (including investments)
 
@@ -92,6 +104,11 @@ Net Savings Rate   = (Total Income - Total Expenses - Taxes) / (Total Income - T
 ### Short-Term (Next 30-60 Days)
 
 1. Start with current account balances from `account(operation="list")`
+
+```
+account(operation="list")
+```
+
 2. Identify recurring income (salary dates, rental income, dividends)
 3. Identify recurring expenses (rent/mortgage, subscriptions, loan payments, insurance)
 4. Subtract known upcoming one-time expenses (if any flagged by user)
@@ -111,52 +128,7 @@ Net Savings Rate   = (Total Income - Total Expenses - Taxes) / (Total Income - T
 
 ## Tax-Aware Financial Planning
 
-### Tax-Relevant Transaction Tagging
-
-Ensure these categories are properly tracked in Actual for tax time:
-- Business expenses (Schedule C — use `categorize_schedule_c_deductions` from household-tax-mcp)
-- Health insurance premiums (self-employed deduction)
-- Retirement contributions (SEP-IRA, Solo 401(k))
-- Charitable donations (Schedule A itemized deductions)
-- Home office expenses (simplified or actual method)
-- Professional development and education
-- Travel and business meals (50% deductible)
-
-### Quarterly Estimated Tax Payments (1040-ES)
-
-1. Pull YTD income from Actual (self-employment, W-2, investment income)
-2. Pull capital gains/dividends from ghostfolio-mcp
-3. Normalize facts to the reduced exact `household-tax` contract
-4. Use `assess_exact_support` before any tax recommendation
-5. If supported, use `compute_individual_return_exact`, `compare_individual_payment_strategies`, and `plan_individual_safe_harbor`
-6. If unsupported, stop and report the gap rather than approximating
-
-**Due dates:** Q1 Apr 15, Q2 Jun 15, Q3 Sep 15, Q4 Jan 15 (next year)
-
-### Self-Employment Tax (Schedule SE)
-
-Self-employment income is outside the reduced exact household-tax scope. For these cases:
-- Social Security tax (12.4% up to wage base)
-- Medicare tax (2.9% + 0.9% additional above $200k)
-- Deductible half of SE tax (reduces AGI)
-- do not use `household-tax` as an exact calculator; surface the unsupported scope explicitly
-
-### Schedule C Deduction Categorization
-
-Use `categorize_schedule_c_deductions` to map Actual Budget expense categories to Schedule C lines. Review unmapped categories quarterly to ensure all deductions are captured.
-
-### Exact Tax Support
-
-`household-tax` no longer exposes generic scenario comparison tools. Use the
-exact quarterly-tax/safe-harbor surface only when the case is inside the
-supported 2026 `US` + `MA` scope; otherwise flag that exact household-tax
-support is unavailable for the requested budgeting decision.
-
-### Integration with Ghostfolio
-
-- Pull capital gains data from ghostfolio-mcp for tax planning
-- Short-term vs long-term classification based on holding period (1 year for equities)
-- Coordinate with investing-workspace tax servers for wash sale and TLH analysis
+Tax-aware budgeting integrates transaction tagging, quarterly estimated payments, Schedule C deductions, and capital gains tracking across actual-budget, household-tax-mcp, and ghostfolio-mcp. See [references/TAX_PLANNING.md](references/TAX_PLANNING.md) for detailed tax-aware planning workflows.
 
 ## Report Formats
 

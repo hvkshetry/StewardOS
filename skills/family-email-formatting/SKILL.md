@@ -1,7 +1,6 @@
 ---
 name: family-email-formatting
-description: |
-  Generate family-office HTML emails for family personas. Use `brief` mode for scheduled or report-style outbound emails and `reply` mode for natural in-thread family replies.
+description: "Formats HTML emails with family branding and persona-specific styling, composes executive-summary briefs with KPI cards and data visualizations, drafts natural prose replies for in-thread family conversations, and applies inline CSS and provenance attribution. Use when composing outbound HTML emails for family-office personas, drafting email replies to family threads, formatting scheduled briefs or recurring reports, or sending persona-branded communications via Gmail. Supports email, draft, compose, send, reply, format, brief, and report workflows across brief and reply modes."
 ---
 
 # Family Email Formatting (`brief` + `reply`)
@@ -18,7 +17,8 @@ Use this skill whenever composing outbound HTML email for family-office personas
 4. Render the mode-appropriate layout:
    - `brief` -> `references/base-template.md`
    - `reply` -> `references/reply-template.md`
-5. Compose the email using the mandatory style rules for the selected mode.
+5. Validate output: confirm no markdown leaked into HTML, persona variant matches the intended alias, and only mode-appropriate elements are present (e.g. no KPI cards in reply mode, no conversational prose structure in brief mode).
+6. Compose the email using the mandatory style rules for the selected mode.
 
 ## `brief` mode
 
@@ -42,9 +42,7 @@ Use `brief` mode for scheduled or report-style outbound emails.
 - Replace the old fixed "Signal Graph" concept with one optional primary visual that best explains the key monitoring point or decision in the brief.
 - The primary visual may be a spark trend, bar chart, line chart, scatter plot, progress bars, or another compact honest graphic.
 - Omit the primary visual entirely when the data is too sparse or prose is clearer.
-- Deep Dive must include where information came from:
-  - MCP-backed facts: cite MCP server/tool names.
-  - Web research: include links actually consulted.
+- Deep Dive must include where information came from. See Provenance Attribution section below for source citation rules.
 - Do not omit narrative context when decisions or tradeoffs are involved.
 
 ### Recommended brief-mode visual hierarchy
@@ -76,10 +74,7 @@ Use `reply` mode for inbound family-email responses that should read like a natu
 - Use lists, tables, or compact charts only when they communicate more clearly than prose.
 - Do not force KPI cards, action boards, dashboard framing, or provenance tables into normal replies.
 - End with a natural closing and persona sign-off on every reply.
-- Keep provenance inline by default when material:
-  - mention the MCP server/tool in the prose, ideally parenthetically or in a short supporting clause, when it materially supports the answer
-  - mention web sources in the prose when they materially support the answer, using clean clickable HTML links when helpful
-  - use a final "Sources consulted" note only when the reply is research-heavy or cites enough sources that inline attribution would hurt readability
+- See Provenance Attribution section below for source citation rules. In reply mode, default to inline attribution.
 - Inline styles only.
 - No markdown in final body.
 - Use real HTML structure for the body (`<p>`, `<div>`, `<table>`, `<a>`, etc.) so tables, charts, and clean clickable source links can be added when valuable.
@@ -93,12 +88,23 @@ Use `reply` mode for inbound family-email responses that should read like a natu
 5. Natural closing and persona sign-off.
 6. Optional compact table, chart, or short sources note when warranted.
 
-## Provenance guidance
+## Provenance Attribution
 
 - Prefer concrete attribution, e.g. `MCP: paperless.search_documents` or `MCP: google-workspace-personal-ro.get_events`.
-- For web lookups, include direct URLs.
-- In `brief` mode, include explicit provenance in the deep dive or provenance section.
-- In `reply` mode, default to inline attribution. Use a short final source note only for research-heavy or many-source replies.
+- For web lookups, include direct URLs actually consulted.
+- MCP-backed facts: cite MCP server/tool names in the attribution.
+- Web research: include clickable HTML links to sources consulted.
+- In `brief` mode, include explicit provenance in the Deep Dive narrative or a dedicated provenance table (claim, source system/tool, link/reference).
+- In `reply` mode, default to inline attribution — mention the MCP server/tool parenthetically or in a short supporting clause when it materially supports the answer. Mention web sources in the prose using clean clickable HTML links when helpful. Use a final "Sources consulted" note only when the reply is research-heavy or cites enough sources that inline attribution would hurt readability.
+
+## Pre-Send Validation
+
+Before sending any email, the agent verifies:
+
+- HTML renders without markdown artifacts: no `**bold**`, `_italic_`, `[links](url)`, or `# headings` in the final output.
+- Persona variant loaded correctly from `references/persona-variants.json` and matches the intended alias (accent color, role label, signature copy).
+- Mode-appropriate elements only: reply mode does not include brief-mode elements (KPI cards, action tables, provenance tables) and brief mode does not include reply-mode conversational structure.
+- Inline styles only: no `<style>` blocks, no `<link>` tags, and no external CSS references in the final HTML body.
 
 ## Automation reply contract
 
